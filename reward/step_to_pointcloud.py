@@ -1,0 +1,85 @@
+"""
+Convert a STEP file string to a sampled 3D point cloud.
+
+Used by the RL reward pipeline (scd_reward.py) and evaluation (evaluate.py).
+Writes a temp file, reads with OpenCASCADE STEPControl_Reader, tessellates,
+samples points uniformly, deletes the temp file.
+
+Never raises — returns None on any failure so reward can safely return 0.0.
+"""
+
+import os
+import sys
+import tempfile
+
+import numpy as np
+
+
+def step_to_pointcloud(step_content: str, n_points: int = 2048,
+                       text2cad_src: str | None = None) -> np.ndarray | None:
+    """
+    Convert STEP text → sampled 3D point cloud.
+
+    Args:
+        step_content: complete STEP file as a string
+        n_points: number of points to sample from the mesh
+        text2cad_src: optional path to Text2CAD/CadSeqProc (for OCC import fallback)
+
+    Returns:
+        (n_points, 3) float32 array, or None if STEP is invalid/unrenderable.
+    """
+    if text2cad_src:
+        parent = os.path.dirname(text2cad_src)
+        for p in [text2cad_src, parent]:
+            if p not in sys.path:
+                sys.path.insert(0, p)
+
+    # Write to temp file (OCC requires a file path, not a string)
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".step")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(step_content)
+
+        from OCC.Core.STEPControl import STEPControl_Reader
+        from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+        from OCC.Core.TopExp import TopExp_Explorer
+        from OCC.Core.TopAbs import TopAbs_FACE
+        from OCC.Core.BRep import BRep_Tool
+
+        reader = STEPControl_Reader()
+        status = reader.ReadFile(tmp_path)
+        if status != 1:  # 1 = IFSelect_RetDone
+            return None
+
+        reader.TransferRoots()
+        shape = reader.OneShape()
+        if shape.IsNull():
+            return None
+
+        # Tessellate with deflection 0.01
+        BRepMesh_IncrementalMesh(shape, 0.01).Perform()
+
+        all_pts = []
+        explorer = TopExp_Explorer(shape, TopAbs_FACE)
+        while explorer.More():
+            face = explorer.Current()
+            tri = BRep_Tool.Triangulation_s(face, face.Location())
+            if tri is not None:
+                for i in range(1, tri.NbNodes() + 1):
+                    node = tri.Node(i)
+                    all_pts.append([node.X(), node.Y(), node.Z()])
+            explorer.Next()
+
+        if not all_pts:
+            return None
+
+        pts = np.array(all_pts, dtype=np.float32)
+        # Sample with replacement if fewer mesh points than requested
+        idx = np.random.choice(len(pts), size=n_points, replace=(len(pts) < n_points))
+        return pts[idx]
+
+    except Exception:
+        return None
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)

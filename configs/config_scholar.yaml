@@ -1,0 +1,54 @@
+# ── Purdue Scholar Cluster config ──────────────────────────────────────────
+# Replace SCHOLAR_USERNAME with your actual Purdue username everywhere below.
+# This file is identical to config.yaml but with Scholar-side paths.
+
+paths:
+  # These are only needed if you re-run data export (you don't need to)
+  cad_seq_dir:  "/home/SCHOLAR_USERNAME/cad_seq"
+  caption_csv:  "/home/SCHOLAR_USERNAME/text2cad_v1.1.csv"
+  split_json:   "/home/SCHOLAR_USERNAME/train_test_val.json"
+  text2cad_src: "/home/SCHOLAR_USERNAME/Text2CAD/CadSeqProc"
+
+  # Output paths on Scholar
+  step_output_dir:      "/home/SCHOLAR_USERNAME/StepLLM/data/step_files"
+  processed_dir:        "/home/SCHOLAR_USERNAME/StepLLM/data/processed"
+  faiss_index_path:     "/home/SCHOLAR_USERNAME/StepLLM/retrieval/caption_index.faiss"
+  faiss_metadata_path:  "/home/SCHOLAR_USERNAME/StepLLM/retrieval/metadata.pkl"
+  sft_checkpoint_dir:   "/home/SCHOLAR_USERNAME/StepLLM/checkpoints/sft"
+  rl_checkpoint_dir:    "/home/SCHOLAR_USERNAME/StepLLM/checkpoints/rl"
+
+data:
+  max_entities: 500
+  caption_column: "abstract"
+
+model:
+  base_model: "meta-llama/Llama-3.2-3B-Instruct"
+  max_seq_length: 8192
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+
+sft:
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 8    # effective batch = 16 (paper)
+  learning_rate: 2.0e-4
+  num_epochs: 10
+  warmup_ratio: 0.05
+  optim: "adamw_8bit"
+
+rl:
+  num_generations: 8
+  kl_coef: 0.02
+  entropy_coef: 0.005
+  learning_rate: 3.0e-6
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  max_steps: 160
+  reward:
+    delta_low: 0.01
+    delta_high: 0.5
+    n_sample_points: 2048
+
+retrieval:
+  model: "all-MiniLM-L6-v2"
+  top_k: 1

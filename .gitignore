@@ -1,0 +1,23 @@
+# Model weights and checkpoints
+checkpoints/
+
+# Training data (15GB)
+data/
+
+# Generated retrieval indices
+retrieval/*.faiss
+retrieval/*.pkl
+
+# Training/SLURM logs
+logs/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Mac metadata
+.DS_Store
+
+# Environment files
+.env

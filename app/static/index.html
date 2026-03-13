@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>STEP-LLM: Text to CAD</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 640px;
+      margin: 80px auto;
+      padding: 0 24px;
+      color: #111;
+    }
+    h1 { font-size: 1.8em; margin-bottom: 4px; }
+    .subtitle { color: #666; margin-top: 4px; margin-bottom: 28px; }
+    label { font-weight: 600; display: block; margin-bottom: 6px; }
+    textarea {
+      width: 100%;
+      padding: 12px;
+      font-size: 1em;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      resize: vertical;
+      height: 90px;
+    }
+    textarea:focus { outline: none; border-color: #0070f3; }
+    button {
+      margin-top: 12px;
+      padding: 11px 32px;
+      font-size: 1em;
+      background: #111;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: #333; }
+    button:disabled { background: #999; cursor: not-allowed; }
+    #status { margin-top: 18px; color: #555; font-size: 0.95em; min-height: 1.4em; }
+    #status.error { color: #c00; }
+    #download-area { display: none; margin-top: 20px; }
+    a.download-btn {
+      display: inline-block;
+      padding: 11px 28px;
+      background: #0070f3;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 6px;
+      font-size: 0.95em;
+    }
+    a.download-btn:hover { background: #0058c4; }
+    .hint { font-size: 0.82em; color: #888; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>STEP-LLM</h1>
+  <p class="subtitle">Describe a 3D object in plain English — get a CAD file.</p>
+
+  <label for="caption">Object description</label>
+  <textarea
+    id="caption"
+    placeholder="e.g. a hollow cylinder with a flange at the base"
+  ></textarea>
+  <br>
+  <button id="btn" onclick="generate()">Generate STEP File</button>
+  <p class="hint">Press Enter to submit &nbsp;·&nbsp; Shift+Enter for new line</p>
+
+  <div id="status"></div>
+  <div id="download-area"></div>
+
+  <script>
+    async function generate() {
+      const caption = document.getElementById('caption').value.trim();
+      if (!caption) return;
+
+      const btn    = document.getElementById('btn');
+      const status = document.getElementById('status');
+      const dl     = document.getElementById('download-area');
+
+      btn.disabled = true;
+      btn.textContent = 'Generating…';
+      status.textContent = 'Running inference — this takes 30–90 seconds…';
+      status.className = '';
+      dl.style.display = 'none';
+
+      try {
+        const res = await fetch('/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ caption }),
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          status.textContent = 'Error: ' + err.detail;
+          status.className = 'error';
+          return;
+        }
+
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const filename = caption.slice(0, 40).replace(/\s+/g, '_') + '.step';
+
+        status.textContent = 'Done!';
+        dl.innerHTML = `<a class="download-btn" href="${url}" download="${filename}">
+          Download ${filename}
+        </a>`;
+        dl.style.display = 'block';
+
+      } catch (e) {
+        status.textContent = 'Error: ' + e.message;
+        status.className = 'error';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate STEP File';
+      }
+    }
+
+    document.getElementById('caption').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        generate();
+      }
+    });
+  </script>
+</body>
+</html>
