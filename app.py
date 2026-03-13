@@ -2,7 +2,7 @@
 STEP-LLM Gradio App — Text to CAD.
 
 Usage:
-    cd /path/to/StepLLM
+    cd /path/to/StepForge
     CHECKPOINT=checkpoints/rl/final python app.py
 
 Then open http://localhost:7860

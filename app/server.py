@@ -2,7 +2,7 @@
 Local web server for STEP-LLM inference.
 
 Usage:
-    cd /path/to/StepLLM
+    cd /path/to/StepForge
     CHECKPOINT=checkpoints/rl/final python app/server.py
 
 Then open http://localhost:8000 in your browser.
