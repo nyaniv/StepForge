@@ -1,0 +1,17 @@
+# pip dependencies (conda users: use environment.yml instead)
+# Note: pythonocc-core must be installed via conda (conda-forge), not pip.
+# Note: pytorch must match your CUDA version; see https://pytorch.org/get-started/locally/
+
+unsloth[colab-new]         # or unsloth[cu121] for CUDA 12.1
+transformers>=4.40
+trl>=0.8.6                 # GRPOTrainer
+peft>=0.10
+sentence-transformers      # SentenceTransformer for RAG embeddings
+faiss-cpu                  # or faiss-gpu if CUDA available
+open3d                     # FPFH + RANSAC + ICP alignment
+scipy                      # cKDTree for Chamfer Distance
+bitsandbytes               # 8-bit AdamW
+pandas
+loguru
+omegaconf
+tqdm
