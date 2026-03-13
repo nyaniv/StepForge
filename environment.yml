@@ -1,4 +1,4 @@
-name: step_llm
+name: stepforge
 channels:
   - conda-forge
   - pytorch
