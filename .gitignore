@@ -1,8 +1,12 @@
 # Model weights and checkpoints
 checkpoints/
 
-# Training data (15GB)
-data/
+# Training data and generated artifacts (large)
+data/processed/
+data/step_files/
+data/captions.csv
+data/*.pth
+data/*.zip
 
 # Generated retrieval indices
 retrieval/*.faiss
