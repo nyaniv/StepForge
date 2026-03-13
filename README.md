@@ -1,14 +1,25 @@
-# STEP-LLM
+# STEP_LLM — Reimplementation and Extension
 
-Independent reimplementation of [STEP-LLM](https://arxiv.org/abs/2601.12641) (Chen et al., 2026).
-Fine-tunes Llama-3.2-3B-Instruct to generate raw STEP (ISO 10303) files from natural language
-captions, using SFT + GRPO reinforcement learning.
+An independent reimplementation of [STEP-LLM](https://arxiv.org/abs/2601.12641)
+(Chen et al., 2026), developed as part of an undergraduate research project at
+Purdue University with Prof. Gomez.
 
-Achieves ~40× improvement in geometric fidelity over [Text2CAD](https://github.com/SadilKhan/Text2CAD): MSCD 0.098 vs 3.99.
+The goal: fine-tune open-source LLMs (starting with Llama-3.2-3B-Instruct) to
+generate raw STEP files (ISO 10303) from natural language descriptions of 3D parts,
+using supervised fine-tuning and GRPO reinforcement learning with geometric reward
+signals.
 
----
+This repo is a from-scratch implementation — not a fork of the
+[official code](https://github.com/JasonShiii/STEP-LLM) — built to support
+ongoing extensions including:
+- Agentic text → CAD → FEA pipeline orchestration
+- RAG-based retrieval of design specifications and reference geometry
+- Experimentation with alternative base models and reward functions
 
 ## Status
+
+Reimplementation of the core SFT + GRPO pipeline is complete.
+Reproduction of published metrics (see below) is in progress.
 
 | Phase | Status |
 |-------|--------|
@@ -17,6 +28,20 @@ Achieves ~40× improvement in geometric fidelity over [Text2CAD](https://github.
 | SFT training (10 epochs, Llama-3.2-3B) | ✅ Done — checkpoint saved |
 | RL training (GRPO, 80 steps) | ⏳ Pending — queued on Purdue Scholar Cluster |
 | Evaluation | ⏳ Pending — runs after RL |
+
+## Comparison to prior work
+
+The STEP-LLM paper reports the following results against the
+[Text2CAD](https://github.com/SadilKhan/Text2CAD) baseline
+(Khan et al., NeurIPS 2024):
+
+| Method | CR (%) | RR (%) | MSCD | AEC |
+|---|---|---|---|---|
+| Text2CAD | — | 98.38 | 3.99 | 390.41 |
+| STEP-LLM (SFT) | 97.00 | 95.18 | 0.53 | 240.99 |
+| STEP-LLM (GRPO) | 99.00 | 92.00 | 0.098 | — |
+
+*These are the paper's reported numbers, not yet independently reproduced here.*
 
 ---
 
@@ -63,17 +88,6 @@ Everything else was written from scratch to implement the STEP-LLM paper:
 - `evaluation/evaluate.py` — Computes CR, RR, MSCD, AEC on test set
 - `inference/generate.py` — Live RAG → prompt → generate → extract STEP
 - `app.py` — Gradio demo: text input → STEP generation → STL preview + download
-
----
-
-## Results (from paper)
-
-| Method | CR (%) | RR (%) | MSCD | AEC |
-|--------|--------|--------|------|-----|
-| Ground truth | — | — | — | 265.64 |
-| Text2CAD | — | 98.38 | 3.99 | 390.41 |
-| STEP-LLM SFT | 97.00 | 95.18 | 0.53 | 240.99 |
-| STEP-LLM GRPO | 99.00 | 92.00 | 0.098 | — |
 
 ---
 
