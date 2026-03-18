@@ -2,8 +2,8 @@
 # runpod_setup.sh — one-time (or idempotent) setup for RunPod pods.
 #
 # What it does:
-#   1. Loads secrets from .env
-#   2. Creates the stepforge conda environment
+#   1. Loads secrets from .env (optional — falls back to pod env vars)
+#   2. Installs Python packages via pip
 #   3. Installs the correct Unsloth CUDA variant
 #   4. Downloads Text2CAD dataset from HuggingFace (skips if already present)
 #   5. Clones Text2CAD source code (for export_steps.py)
@@ -11,8 +11,8 @@
 #   7. Validates everything is in place
 #
 # Usage:
-#   cp .env.example .env   # fill in HUGGINGFACE_TOKEN
 #   bash runpod_setup.sh
+#   (optional) cp .env.example .env  # fill in HUGGINGFACE_TOKEN if not set as pod env var
 #
 # Run this once after cloning the repo. Safe to re-run — skips completed steps.
 
@@ -22,35 +22,42 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 VOLUME="${VOLUME:-/runpod-volume}"
 
 # ── Load secrets ───────────────────────────────────────────────────────────────
-if [ ! -f "$REPO/.env" ]; then
-    echo "ERROR: $REPO/.env not found."
-    echo "  cp $REPO/.env.example $REPO/.env  and fill in your HUGGINGFACE_TOKEN"
-    exit 1
+if [ -f "$REPO/.env" ]; then
+    echo "==> Loading secrets from .env..."
+    set -a; source "$REPO/.env"; set +a
+else
+    echo "==> No .env found — using pod environment variables"
 fi
-set -a; source "$REPO/.env"; set +a
 
-: "${HUGGINGFACE_TOKEN:?HUGGINGFACE_TOKEN must be set in .env}"
+: "${HUGGINGFACE_TOKEN:?HUGGINGFACE_TOKEN must be set (in .env or as a pod env var)}"
 export VOLUME REPO
 
 echo "==> REPO   = $REPO"
 echo "==> VOLUME = $VOLUME"
 
-# ── Conda environment ──────────────────────────────────────────────────────────
-source "$(conda info --base)/etc/profile.d/conda.sh"
+# ── Python packages ────────────────────────────────────────────────────────────
+echo "==> Installing Python packages via pip..."
+pip install --quiet \
+    "pythonocc-core==7.7.2" \
+    "transformers>=4.40" \
+    "trl>=0.8.6" \
+    "peft>=0.10" \
+    "datasets" \
+    "sentence-transformers" \
+    "faiss-cpu" \
+    "open3d" \
+    "scipy" \
+    "bitsandbytes" \
+    "pandas" \
+    "loguru" \
+    "omegaconf" \
+    "tqdm" \
+    "huggingface_hub"
 
-if conda env list | grep -q "^stepforge "; then
-    echo "==> conda env 'stepforge' already exists, skipping create"
-else
-    echo "==> Creating conda env from environment.yml..."
-    conda env create -f "$REPO/environment.yml" --name stepforge -y
-fi
-conda activate stepforge
-
-# Install the correct Unsloth variant for this machine's CUDA version
-CUDA_VER=$(python -c "import torch; v=torch.version.cuda; print(v.replace('.','')[:3])" 2>/dev/null || echo "121")
+# Install correct unsloth CUDA variant
+CUDA_VER=$(python -c "import torch; v=torch.version.cuda; print(v.replace('.','')[:3])" 2>/dev/null || echo "124")
 echo "==> Installing unsloth[cu${CUDA_VER}]..."
 pip install --quiet "unsloth[cu${CUDA_VER}]" --upgrade
-pip install --quiet huggingface_hub  # needed for download below
 
 # ── Output directories ─────────────────────────────────────────────────────────
 echo "==> Creating output directories..."
@@ -133,7 +140,6 @@ fi
 echo ""
 echo "Setup complete. Run training with:"
 echo ""
-echo "  conda activate stepforge"
 echo "  cd $REPO"
 echo ""
 echo "  # Full pipeline (data prep — only needed once; persists on network volume)"
