@@ -184,6 +184,7 @@ def main():
         output_dir=cfg.paths.rl_checkpoint_dir,
         num_generations=cfg.rl.num_generations,
         **{kl_kwarg: cfg.rl.kl_coef},
+        entropy_coef=cfg.rl.entropy_coef,
         learning_rate=cfg.rl.learning_rate,
         per_device_train_batch_size=cfg.rl.per_device_train_batch_size,
         gradient_accumulation_steps=cfg.rl.gradient_accumulation_steps,
