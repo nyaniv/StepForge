@@ -37,8 +37,9 @@ echo "==> REPO   = $REPO"
 echo "==> VOLUME = $VOLUME"
 
 # ── Miniforge ──────────────────────────────────────────────────────────────────
-# Install onto the network volume to avoid filling the container disk (~10GB limit)
-MINIFORGE="${VOLUME}/miniforge"
+# Install on the container disk (fast local SSD, 100GB) — NOT the network volume.
+# Only data + checkpoints go on the network volume (persistent).
+MINIFORGE="/opt/miniforge"
 if [ ! -d "$MINIFORGE" ]; then
     echo "==> Installing Miniforge..."
     curl -fsSL https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
