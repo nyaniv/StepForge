@@ -76,7 +76,7 @@ class Retriever:
         _, indices = self.index.search(embeddings, 20)
         results = []
         for i, query_indices in enumerate(indices):
-            exclude = exclude_uids[i] if exclude_uids else None
+            exclude = exclude_uids[i] if exclude_uids and i < len(exclude_uids) else None
             for idx in query_indices:
                 rec = self.records[int(idx)]
                 if exclude is None or rec["uid"] != exclude:

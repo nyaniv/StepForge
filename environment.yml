@@ -9,10 +9,11 @@ dependencies:
   - pythonocc-core=7.7.2        # MUST match Text2CAD version — OCC API is version-sensitive
   - pip
   - pip:
-    - unsloth[colab-new]         # or unsloth[cu121] for CUDA 12.1
+    - unsloth                    # install cu121/cu118 variant post-setup (see runpod_setup.sh)
     - transformers>=4.40
     - trl>=0.8.6                 # GRPOTrainer
     - peft>=0.10
+    - datasets
     - sentence-transformers      # SentenceTransformer for RAG embeddings
     - faiss-cpu                  # or faiss-gpu if CUDA available
     - open3d                     # FPFH + RANSAC + ICP alignment

@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=step_llm_rl
-#SBATCH --output=/home/nyaniv/StepLLM/logs/rl_%j.out
-#SBATCH --error=/home/nyaniv/StepLLM/logs/rl_%j.err
+#SBATCH --output=/home/SCHOLAR_USERNAME/StepLLM/logs/rl_%j.out
+#SBATCH --error=/home/SCHOLAR_USERNAME/StepLLM/logs/rl_%j.err
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -29,18 +29,18 @@ if [ -n "$CONDA_BASE" ] && [ -f "$CONDA_BASE/etc/profile.d/conda.sh" ]; then
 fi
 
 # ── Activate environment ─────────────────────────────────────────────────────
-conda activate /scratch/scholar/nyaniv/envs/step_llm
+conda activate stepforge
 
 # ── Environment variables ────────────────────────────────────────────────────
 # Set your HuggingFace token: export HUGGINGFACE_TOKEN="hf_..."
 export HUGGINGFACE_TOKEN="${HUGGINGFACE_TOKEN:?HF token not set}"
-export PYTHONPATH=/home/nyaniv/StepLLM
+export PYTHONPATH=/home/SCHOLAR_USERNAME/StepLLM
 export KMP_DUPLICATE_LIB_OK=TRUE
 export TOKENIZERS_PARALLELISM=false
 
 # ── Create output dirs ───────────────────────────────────────────────────────
-mkdir -p /home/nyaniv/StepLLM/logs
-mkdir -p /scratch/scholar/nyaniv/checkpoints/rl
+mkdir -p /home/SCHOLAR_USERNAME/StepLLM/logs
+mkdir -p /scratch/scholar/SCHOLAR_USERNAME/checkpoints/rl
 
 # ── Signal handler for resubmission ─────────────────────────────────────────
 _resubmit() {
@@ -51,7 +51,7 @@ _resubmit() {
 trap _resubmit SIGUSR1
 
 # ── Run RL (cold-starts from SFT checkpoint) ─────────────────────────────────
-cd /home/nyaniv/StepLLM
+cd /home/SCHOLAR_USERNAME/StepLLM
 echo "Node: $(hostname)"
 echo "GPUs: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'unknown')"
 echo "Starting RL at $(date)"
