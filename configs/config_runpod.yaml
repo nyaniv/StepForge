@@ -1,9 +1,9 @@
-# RunPod configuration — all paths read from environment variables.
-# Set VOLUME and REPO in your .env file (see .env.example).
+# RunPod configuration — paths read from environment variables.
+# All training parameters match the paper exactly (no shortcuts).
+# Set VOLUME in your .env file (see .env.example).
 #
 # VOLUME = RunPod Network Volume mount point (e.g. /runpod-volume)
 #          Large data and checkpoints live here — persists across pod restarts.
-# REPO   = Path where this repo is cloned (e.g. /workspace/StepForge)
 
 paths:
   # Raw data (on Network Volume — downloaded once by runpod_setup.sh)
@@ -20,26 +20,38 @@ paths:
   sft_checkpoint_dir:    ${oc.env:VOLUME}/checkpoints/sft
   rl_checkpoint_dir:     ${oc.env:VOLUME}/checkpoints/rl
 
+data:
+  max_entities: 500        # filter threshold — paper excludes >=500 entity files
+  caption_column: "abstract"  # use L0 abstract captions
+
 model:
-  name: meta-llama/Llama-3.2-3B-Instruct
+  base_model: "meta-llama/Llama-3.2-3B-Instruct"  # best per paper Table 3
+  max_seq_length: 8192
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
 
-training:
-  sft:
-    num_epochs: 3
-    per_device_batch_size: 2
-    gradient_accumulation_steps: 8
-    learning_rate: 2.0e-4
-    max_seq_length: 4096
-    lora_r: 16
-    lora_alpha: 32
-    lora_dropout: 0.05
-    fp16: true
+sft:
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 8    # effective batch = 16 (paper)
+  learning_rate: 2.0e-4             # paper
+  num_epochs: 10                    # paper
+  warmup_ratio: 0.05                # paper
+  optim: "adamw_8bit"               # paper
 
-  rl:
-    max_steps: 80
-    num_generations: 4      # single GPU — halved from Scholar config (8)
-    per_device_batch_size: 1
-    gradient_accumulation_steps: 8
-    learning_rate: 3.0e-6
-    kl_coef: 0.02
-    entropy_coef: 0.005
+rl:
+  num_generations: 8                # paper
+  kl_coef: 0.02                     # paper
+  entropy_coef: 0.005               # paper
+  learning_rate: 3.0e-6             # paper
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  max_steps: 80                     # paper
+  reward:
+    delta_low: 0.01                 # paper
+    delta_high: 0.5                 # paper
+    n_sample_points: 2048
+
+retrieval:
+  model: "all-MiniLM-L6-v2"
+  top_k: 1                          # paper retrieves top-1
