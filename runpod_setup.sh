@@ -3,8 +3,9 @@
 #
 # What it does:
 #   1. Loads secrets from .env (optional — falls back to pod env vars)
-#   2. Installs Python packages via pip
-#   3. Installs the correct Unsloth CUDA variant
+#   2. Installs Miniforge (for pythonocc-core, which is conda-forge only)
+#   3. Installs Python packages via pip (into Miniforge Python)
+#   4. Installs the correct Unsloth CUDA variant
 #   4. Downloads Text2CAD dataset from HuggingFace (skips if already present)
 #   5. Clones Text2CAD source code (for export_steps.py)
 #   6. Creates all required output directories
@@ -35,10 +36,32 @@ export VOLUME REPO
 echo "==> REPO   = $REPO"
 echo "==> VOLUME = $VOLUME"
 
+# ── Miniforge (pythonocc-core is conda-forge only, not on PyPI) ────────────────
+MINIFORGE=/opt/miniforge
+if [ ! -d "$MINIFORGE" ]; then
+    echo "==> Installing Miniforge..."
+    curl -fsSL https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
+        -o /tmp/miniforge.sh
+    bash /tmp/miniforge.sh -b -p "$MINIFORGE"
+    rm /tmp/miniforge.sh
+else
+    echo "==> Miniforge already installed"
+fi
+export PATH="$MINIFORGE/bin:$PATH"
+# Persist for interactive sessions
+grep -qxF 'export PATH="/opt/miniforge/bin:$PATH"' ~/.bashrc \
+    || echo 'export PATH="/opt/miniforge/bin:$PATH"' >> ~/.bashrc
+
+if ! python -c "import OCC" 2>/dev/null; then
+    echo "==> Installing pythonocc-core from conda-forge..."
+    conda install -c conda-forge pythonocc-core=7.7.2 -y
+else
+    echo "==> pythonocc-core already installed"
+fi
+
 # ── Python packages ────────────────────────────────────────────────────────────
 echo "==> Installing Python packages via pip..."
 pip install --quiet \
-    "pythonocc-core==7.7.2" \
     "transformers>=4.40" \
     "trl>=0.8.6" \
     "peft>=0.10" \
