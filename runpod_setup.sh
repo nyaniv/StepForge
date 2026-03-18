@@ -37,7 +37,8 @@ echo "==> REPO   = $REPO"
 echo "==> VOLUME = $VOLUME"
 
 # ── Miniforge ──────────────────────────────────────────────────────────────────
-MINIFORGE=/opt/miniforge
+# Install onto the network volume to avoid filling the container disk (~10GB limit)
+MINIFORGE="${VOLUME}/miniforge"
 if [ ! -d "$MINIFORGE" ]; then
     echo "==> Installing Miniforge..."
     curl -fsSL https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
@@ -53,7 +54,7 @@ source "$MINIFORGE/etc/profile.d/conda.sh"
 
 # Persist conda init for interactive sessions
 grep -qF "miniforge/etc/profile.d/conda.sh" ~/.bashrc \
-    || echo "source $MINIFORGE/etc/profile.d/conda.sh" >> ~/.bashrc
+    || echo "source \$VOLUME/miniforge/etc/profile.d/conda.sh" >> ~/.bashrc
 
 # ── stepforge conda env ────────────────────────────────────────────────────────
 if conda env list | grep -q "^stepforge "; then
