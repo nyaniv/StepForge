@@ -53,8 +53,17 @@ grep -qxF 'export PATH="/opt/miniforge/bin:$PATH"' ~/.bashrc \
     || echo 'export PATH="/opt/miniforge/bin:$PATH"' >> ~/.bashrc
 
 if ! python -c "import OCC" 2>/dev/null; then
-    echo "==> Installing pythonocc-core from conda-forge..."
-    conda install -c conda-forge pythonocc-core=7.7.2 -y
+    echo "==> Installing pythonocc-core into Python 3.11 conda env..."
+    # Miniforge base may be Python 3.13+; create a dedicated 3.11 env for OCC
+    conda create -n occ python=3.11 pythonocc-core=7.7.2 -c conda-forge -y
+    OCC_ENV="$MINIFORGE/envs/occ"
+    export PYTHONPATH="$OCC_ENV/lib/python3.11/site-packages:${PYTHONPATH:-}"
+    export LD_LIBRARY_PATH="$OCC_ENV/lib:${LD_LIBRARY_PATH:-}"
+    grep -qF "miniforge/envs/occ" ~/.bashrc \
+        || cat >> ~/.bashrc <<BASHEOF
+export PYTHONPATH="$OCC_ENV/lib/python3.11/site-packages:\${PYTHONPATH:-}"
+export LD_LIBRARY_PATH="$OCC_ENV/lib:\${LD_LIBRARY_PATH:-}"
+BASHEOF
 else
     echo "==> pythonocc-core already installed"
 fi
