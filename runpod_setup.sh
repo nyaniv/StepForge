@@ -79,7 +79,7 @@ conda activate stepforge
 
 # ── pip packages (into stepforge) ─────────────────────────────────────────────
 echo "==> Installing pip packages into stepforge..."
-pip install --quiet --no-cache-dir \
+pip install --quiet --no-cache-dir --root-user-action=ignore \
     "transformers>=4.40" \
     "trl>=0.8.6" \
     "peft>=0.10" \
@@ -94,10 +94,15 @@ pip install --quiet --no-cache-dir \
     "tqdm" \
     "huggingface_hub"
 
-# Install correct unsloth CUDA variant
+# Install correct unsloth CUDA variant (cap at cu126 — highest currently supported extra)
 CUDA_VER=$(python -c "import torch; v=torch.version.cuda; print(v.replace('.','')[:3])" 2>/dev/null || echo "124")
+KNOWN_UNSLOTH_EXTRAS="cu121 cu122 cu123 cu124 cu125 cu126"
+if ! echo "$KNOWN_UNSLOTH_EXTRAS" | grep -qw "cu${CUDA_VER}"; then
+    echo "==> unsloth has no cu${CUDA_VER} extra; using cu124..."
+    CUDA_VER="124"
+fi
 echo "==> Installing unsloth[cu${CUDA_VER}]..."
-pip install --quiet --no-cache-dir "unsloth[cu${CUDA_VER}]" --upgrade
+pip install --quiet --no-cache-dir --root-user-action=ignore "unsloth[cu${CUDA_VER}]" --upgrade
 
 # ── Output directories ─────────────────────────────────────────────────────────
 echo "==> Creating output directories..."
@@ -111,30 +116,35 @@ mkdir -p "$VOLUME/data" \
 # ── Download Text2CAD dataset from HuggingFace (skips if already present) ─────
 echo "==> Checking Text2CAD dataset..."
 python - <<PYEOF
-import os, sys
+import os, shutil
 from huggingface_hub import hf_hub_download
 
 VOLUME = os.environ["VOLUME"]
 TOKEN  = os.environ["HUGGINGFACE_TOKEN"]
 
+# Map: (HuggingFace filename in repo, local destination path)
 files = [
-    ("cad_seq.zip",          f"{VOLUME}/data/cad_seq.zip"),
-    ("text2cad_v1.1.csv",    f"{VOLUME}/data/text2cad_v1.1.csv"),
-    ("train_test_val.json",  f"{VOLUME}/data/train_test_val.json"),
+    ("cad_seq.zip",                       f"{VOLUME}/data/cad_seq.zip"),
+    ("text2cad_v1.1/text2cad_v1.1.csv",   f"{VOLUME}/data/text2cad_v1.1.csv"),
+    ("text2cad_v1.1/train_test_val.json",  f"{VOLUME}/data/train_test_val.json"),
 ]
-for fname, dest in files:
+tmp_dir = f"{VOLUME}/data/.hf_tmp"
+for hf_fname, dest in files:
     if os.path.exists(dest):
         print(f"  already present: {dest}")
         continue
-    print(f"  downloading {fname} ...")
-    hf_hub_download(
+    print(f"  downloading {hf_fname} ...")
+    downloaded = hf_hub_download(
         repo_id="SadilKhan/Text2CAD",
         repo_type="dataset",
-        filename=fname,
-        local_dir=f"{VOLUME}/data",
+        filename=hf_fname,
+        local_dir=tmp_dir,
         token=TOKEN,
     )
+    shutil.move(downloaded, dest)
     print(f"  saved to {dest}")
+# Clean up temp dir
+shutil.rmtree(tmp_dir, ignore_errors=True)
 PYEOF
 
 # Unzip cad_seq if needed
