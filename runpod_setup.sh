@@ -3,13 +3,13 @@
 #
 # What it does:
 #   1. Loads secrets from .env (optional — falls back to pod env vars)
-#   2. Installs Miniforge (for pythonocc-core, which is conda-forge only)
-#   3. Installs Python packages via pip (into Miniforge Python)
-#   4. Installs the correct Unsloth CUDA variant
-#   4. Downloads Text2CAD dataset from HuggingFace (skips if already present)
-#   5. Clones Text2CAD source code (for export_steps.py)
-#   6. Creates all required output directories
-#   7. Validates everything is in place
+#   2. Installs Miniforge if absent
+#   3. Creates 'stepforge' conda env (Python 3.11) with conda-forge packages
+#   4. Installs pip-only packages (transformers, trl, unsloth, etc.) into env
+#   5. Downloads Text2CAD dataset from HuggingFace (skips if already present)
+#   6. Clones Text2CAD source code (for export_steps.py)
+#   7. Creates all required output directories
+#   8. Validates everything is in place
 #
 # Usage:
 #   bash runpod_setup.sh
@@ -36,7 +36,7 @@ export VOLUME REPO
 echo "==> REPO   = $REPO"
 echo "==> VOLUME = $VOLUME"
 
-# ── Miniforge (pythonocc-core is conda-forge only, not on PyPI) ────────────────
+# ── Miniforge ──────────────────────────────────────────────────────────────────
 MINIFORGE=/opt/miniforge
 if [ ! -d "$MINIFORGE" ]; then
     echo "==> Installing Miniforge..."
@@ -47,29 +47,29 @@ if [ ! -d "$MINIFORGE" ]; then
 else
     echo "==> Miniforge already installed"
 fi
-export PATH="$MINIFORGE/bin:$PATH"
-# Persist for interactive sessions
-grep -qxF 'export PATH="/opt/miniforge/bin:$PATH"' ~/.bashrc \
-    || echo 'export PATH="/opt/miniforge/bin:$PATH"' >> ~/.bashrc
 
-if ! python -c "import OCC" 2>/dev/null; then
-    echo "==> Installing pythonocc-core into Python 3.11 conda env..."
-    # Miniforge base may be Python 3.13+; create a dedicated 3.11 env for OCC
-    conda create -n occ python=3.11 pythonocc-core=7.7.2 -c conda-forge -y
-    OCC_ENV="$MINIFORGE/envs/occ"
-    export PYTHONPATH="$OCC_ENV/lib/python3.11/site-packages:${PYTHONPATH:-}"
-    export LD_LIBRARY_PATH="$OCC_ENV/lib:${LD_LIBRARY_PATH:-}"
-    grep -qF "miniforge/envs/occ" ~/.bashrc \
-        || cat >> ~/.bashrc <<BASHEOF
-export PYTHONPATH="$OCC_ENV/lib/python3.11/site-packages:\${PYTHONPATH:-}"
-export LD_LIBRARY_PATH="$OCC_ENV/lib:\${LD_LIBRARY_PATH:-}"
-BASHEOF
+# Make conda available in this shell
+source "$MINIFORGE/etc/profile.d/conda.sh"
+
+# Persist conda init for interactive sessions
+grep -qF "miniforge/etc/profile.d/conda.sh" ~/.bashrc \
+    || echo "source $MINIFORGE/etc/profile.d/conda.sh" >> ~/.bashrc
+
+# ── stepforge conda env ────────────────────────────────────────────────────────
+if conda env list | grep -q "^stepforge "; then
+    echo "==> conda env 'stepforge' already exists"
 else
-    echo "==> pythonocc-core already installed"
+    echo "==> Creating stepforge env (Python 3.11 + conda-forge packages)..."
+    conda create -n stepforge python=3.11 \
+        pythonocc-core=7.7.2 \
+        open3d \
+        -c conda-forge -y
 fi
 
-# ── Python packages ────────────────────────────────────────────────────────────
-echo "==> Installing Python packages via pip..."
+conda activate stepforge
+
+# ── pip packages (into stepforge) ─────────────────────────────────────────────
+echo "==> Installing pip packages into stepforge..."
 pip install --quiet \
     "transformers>=4.40" \
     "trl>=0.8.6" \
@@ -77,7 +77,6 @@ pip install --quiet \
     "datasets" \
     "sentence-transformers" \
     "faiss-cpu" \
-    "open3d" \
     "scipy" \
     "bitsandbytes" \
     "pandas" \
@@ -170,8 +169,9 @@ fi
 
 # ── Done ───────────────────────────────────────────────────────────────────────
 echo ""
-echo "Setup complete. Run training with:"
+echo "Setup complete. Activate the env and run training with:"
 echo ""
+echo "  conda activate stepforge"
 echo "  cd $REPO"
 echo ""
 echo "  # Full pipeline (data prep — only needed once; persists on network volume)"
