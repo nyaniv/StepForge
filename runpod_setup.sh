@@ -52,9 +52,17 @@ fi
 # Make conda available in this shell
 source "$MINIFORGE/etc/profile.d/conda.sh"
 
-# Persist conda init for interactive sessions
+# Redirect caches to network volume — prevents filling the container disk
+export PIP_CACHE_DIR="$VOLUME/.pip-cache"
+export CONDA_PKGS_DIRS="$VOLUME/.conda-pkgs"
+
+# Persist for interactive sessions
 grep -qF "miniforge/etc/profile.d/conda.sh" ~/.bashrc \
-    || echo "source \$VOLUME/miniforge/etc/profile.d/conda.sh" >> ~/.bashrc
+    || echo "source $MINIFORGE/etc/profile.d/conda.sh" >> ~/.bashrc
+grep -qF "PIP_CACHE_DIR" ~/.bashrc \
+    || echo "export PIP_CACHE_DIR=$VOLUME/.pip-cache" >> ~/.bashrc
+grep -qF "CONDA_PKGS_DIRS" ~/.bashrc \
+    || echo "export CONDA_PKGS_DIRS=$VOLUME/.conda-pkgs" >> ~/.bashrc
 
 # ── stepforge conda env ────────────────────────────────────────────────────────
 if conda env list | grep -q "^stepforge "; then
@@ -71,7 +79,7 @@ conda activate stepforge
 
 # ── pip packages (into stepforge) ─────────────────────────────────────────────
 echo "==> Installing pip packages into stepforge..."
-pip install --quiet \
+pip install --quiet --no-cache-dir \
     "transformers>=4.40" \
     "trl>=0.8.6" \
     "peft>=0.10" \
@@ -89,7 +97,7 @@ pip install --quiet \
 # Install correct unsloth CUDA variant
 CUDA_VER=$(python -c "import torch; v=torch.version.cuda; print(v.replace('.','')[:3])" 2>/dev/null || echo "124")
 echo "==> Installing unsloth[cu${CUDA_VER}]..."
-pip install --quiet "unsloth[cu${CUDA_VER}]" --upgrade
+pip install --quiet --no-cache-dir "unsloth[cu${CUDA_VER}]" --upgrade
 
 # ── Output directories ─────────────────────────────────────────────────────────
 echo "==> Creating output directories..."
