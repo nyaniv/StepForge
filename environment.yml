@@ -15,7 +15,7 @@ dependencies:
     - peft>=0.10
     - datasets
     - sentence-transformers      # SentenceTransformer for RAG embeddings
-    - faiss-cpu                  # or faiss-gpu if CUDA available
+    - faiss-cpu                  # FAISS retrieval (CPU is fine — only queried once, pre-training)
     - open3d                     # FPFH + RANSAC + ICP alignment
     - scipy                      # cKDTree for Chamfer Distance
     - bitsandbytes               # 8-bit AdamW

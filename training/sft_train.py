@@ -159,7 +159,7 @@ def main():
         lr_scheduler_type="linear",
         warmup_ratio=cfg.sft.warmup_ratio,
         optim=cfg.sft.optim,
-        fp16=True,
+        bf16=True,
         save_strategy="steps",
         save_steps=200,
         save_total_limit=3,

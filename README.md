@@ -27,7 +27,7 @@ Reproduction of published metrics (see below) is in progress.
 | Data pipeline (export, parse, reserialize, pair, split) | ✅ Done |
 | RAG index build + pre-computation | ✅ Done |
 | SFT training (10 epochs, Llama-3.2-3B) | ✅ Done — checkpoint saved |
-| RL training (GRPO, 80 steps) | ⏳ Pending — queued on Purdue Scholar Cluster |
+| RL training (GRPO, 80 steps) | ⏳ In progress — RunPod A100 SXM 80 GB |
 | Evaluation | ⏳ Pending — runs after RL |
 
 ---
@@ -60,6 +60,17 @@ breakdown.
 
 ## Setup
 
+### RunPod (A100 SXM 80 GB — primary)
+
+```bash
+# One-time setup on a new pod — idempotent, safe to re-run
+export HUGGINGFACE_TOKEN=your_token_here
+bash runpod_setup.sh
+conda activate stepforge
+```
+
+### Local / other
+
 ```bash
 conda env create -f environment.yml
 conda activate stepforge
@@ -70,26 +81,27 @@ export HUGGINGFACE_TOKEN=your_token_here   # required for Llama gated model
 
 ## Running
 
-Steps 1–3 are complete. Steps 4–5 are queued on the Purdue Scholar Cluster.
+Steps 1–4 are complete. Step 5 (RL) is running on RunPod.
+Use `configs/config_runpod.yaml` on the pod (paths read from `$VOLUME`).
 
 ```bash
 # Step 1: Build dataset (export STEP files, reserialize, pair captions, split)
-python data/build_dataset.py --config configs/config.yaml
+python data/build_dataset.py --config configs/config_runpod.yaml
 
 # Step 2: Build FAISS retrieval index
-python retrieval/build_index.py --config configs/config.yaml
+python retrieval/build_index.py --config configs/config_runpod.yaml
 
 # Step 3: Pre-compute RAG for training data
-python data/precompute_rag.py --config configs/config.yaml
+python data/precompute_rag.py --config configs/config_runpod.yaml
 
-# Step 4: SFT (~10 epochs, ~2 days on A100)
-python training/sft_train.py --config configs/config.yaml
+# Step 4: SFT (~10 epochs, ~2 days on A100 SXM 80 GB)
+python training/sft_train.py --config configs/config_runpod.yaml
 
 # Step 5: RL with GRPO (80 steps, cold-starts from SFT checkpoint)
-python training/rl_train.py --config configs/config.yaml
+python training/rl_train.py --config configs/config_runpod.yaml
 
 # Step 6: Evaluate
-python evaluation/evaluate.py --checkpoint checkpoints/rl/final --config configs/config.yaml
+python evaluation/evaluate.py --checkpoint checkpoints/rl/final --config configs/config_runpod.yaml
 ```
 
 ### Quick inference (after training)
@@ -138,7 +150,8 @@ print('Caption:', result['caption'][:80])
 StepForge/
 ├── configs/
 │   ├── config.yaml              # All hyperparameters and local paths
-│   └── config_scholar.yaml      # Purdue Scholar Cluster paths (template)
+│   ├── config_runpod.yaml       # RunPod A100 SXM 80 GB (primary)
+│   └── config_scholar.yaml      # Purdue Scholar Cluster (archived)
 ├── data/
 │   ├── export_steps.py          # [adapted from Text2CAD] .pth → STEP files
 │   ├── step_parser.py           # Parse STEP entity DAG
@@ -162,7 +175,8 @@ StepForge/
 ├── app.py                       # Gradio demo
 ├── ATTRIBUTION.md               # File-by-file code origin breakdown
 ├── LICENSE                      # Apache 2.0
-└── slurm_sft.sh / slurm_rl.sh  # Purdue Scholar SLURM scripts
+├── runpod_setup.sh              # One-time pod setup (installs env + downloads data)
+└── slurm_sft.sh / slurm_rl.sh  # Archived — Purdue Scholar SLURM scripts
 ```
 
 ---

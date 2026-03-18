@@ -190,7 +190,7 @@ def main():
         gradient_accumulation_steps=cfg.rl.gradient_accumulation_steps,
         max_steps=cfg.rl.max_steps,
         max_completion_length=1024,
-        fp16=True,
+        bf16=True,
         logging_steps=5,
         save_steps=20,
         report_to="none",

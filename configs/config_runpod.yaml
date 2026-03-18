@@ -1,9 +1,15 @@
 # RunPod configuration — paths read from environment variables.
-# All training parameters match the paper exactly (no shortcuts).
+# Tuned for a single NVIDIA A100 SXM 80 GB pod.
 # Set VOLUME in your .env file (see .env.example).
 #
 # VOLUME = RunPod Network Volume mount point (e.g. /runpod-volume)
 #          Large data and checkpoints live here — persists across pod restarts.
+#
+# A100 SXM 80 GB differences vs. Scholar config:
+#   - bf16 training (native A100 tensor cores; more stable than fp16)
+#   - SFT per_device_train_batch_size 2→4, gradient_accumulation_steps 8→4
+#     (same effective batch=16 with half the accumulation steps = faster wall time)
+#   - RL  per_device_train_batch_size 1→2, gradient_accumulation_steps 8→4
 
 paths:
   # Raw data (on Network Volume — downloaded once by runpod_setup.sh)
@@ -32,8 +38,8 @@ model:
   lora_dropout: 0.05
 
 sft:
-  per_device_train_batch_size: 2
-  gradient_accumulation_steps: 8    # effective batch = 16 (paper)
+  per_device_train_batch_size: 4    # 4 on A100 80GB (was 2); same eff. batch=16
+  gradient_accumulation_steps: 4    # 4 on A100 80GB (was 8); same eff. batch=16
   learning_rate: 2.0e-4             # paper
   num_epochs: 10                    # paper
   warmup_ratio: 0.05                # paper
@@ -44,8 +50,8 @@ rl:
   kl_coef: 0.02                     # paper
   entropy_coef: 0.005               # paper
   learning_rate: 3.0e-6             # paper
-  per_device_train_batch_size: 1
-  gradient_accumulation_steps: 8
+  per_device_train_batch_size: 2    # 2 on A100 80GB (was 1)
+  gradient_accumulation_steps: 4    # 4 on A100 80GB (was 8)
   max_steps: 80                     # paper
   reward:
     delta_low: 0.01                 # paper
