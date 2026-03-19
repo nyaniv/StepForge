@@ -56,16 +56,20 @@ fi
 # Make conda available in this shell
 source "$MINIFORGE/etc/profile.d/conda.sh"
 
-# Redirect pip cache to network volume (large downloads, persist across restarts)
+# Redirect pip cache and HuggingFace cache to network volume.
+# HF_HOME covers model weights, tokenizers, datasets — easily 10-20 GB.
 # NOTE: conda packages stay on local disk — putting CONDA_PKGS_DIRS on the network
 # volume causes cross-filesystem hardlink failures → silent hang during env creation.
 export PIP_CACHE_DIR="$VOLUME/.pip-cache"
+export HF_HOME="$VOLUME/.hf-cache"
 
 # Persist for interactive sessions
 grep -qF "miniforge/etc/profile.d/conda.sh" ~/.bashrc \
     || echo "source $MINIFORGE/etc/profile.d/conda.sh" >> ~/.bashrc
 grep -qF "PIP_CACHE_DIR" ~/.bashrc \
     || echo "export PIP_CACHE_DIR=$VOLUME/.pip-cache" >> ~/.bashrc
+grep -qF "HF_HOME" ~/.bashrc \
+    || echo "export HF_HOME=$VOLUME/.hf-cache" >> ~/.bashrc
 
 # ── stepforge conda env ────────────────────────────────────────────────────────
 # open3d is installed via pip below (same package, avoids conda-forge solver overhead)

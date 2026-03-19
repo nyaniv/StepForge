@@ -33,6 +33,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Route HF downloads to the network volume — the container disk is too small.
+# Must be set before any transformers/huggingface_hub imports.
+if "HF_HOME" not in os.environ:
+    _vol = os.environ.get("VOLUME", "/runpod-volume")
+    os.environ["HF_HOME"] = os.path.join(_vol, ".hf-cache")
+
 import torch
 from datasets import Dataset
 from loguru import logger
