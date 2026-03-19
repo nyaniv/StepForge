@@ -9,17 +9,21 @@ dependencies:
   - pythonocc-core=7.7.2        # MUST match Text2CAD version — OCC API is version-sensitive
   - pip
   - pip:
-    - unsloth                    # install cu121/cu118 variant post-setup (see runpod_setup.sh)
-    - transformers>=4.40
-    - trl>=0.8.6                 # GRPOTrainer
+    - unsloth                    # SFT only; conflicts with trl>0.24.0 but SFT runs first
+    - transformers>=4.51.3       # unsloth requires >=4.51.3; transformers 5.x works fine
+    - trl==0.29.0                # GRPOTrainer; compatible with transformers 5.x
     - peft>=0.10
+    - accelerate                 # required by transformers trainer
     - datasets
     - sentence-transformers      # SentenceTransformer for RAG embeddings
     - faiss-cpu                  # FAISS retrieval (CPU is fine — only queried once, pre-training)
     - open3d                     # FPFH + RANSAC + ICP alignment
     - scipy                      # cKDTree for Chamfer Distance
-    - bitsandbytes               # 8-bit AdamW
+    - bitsandbytes               # 4-bit/8-bit quantization
     - pandas
     - loguru
     - omegaconf
     - tqdm
+    # NOT included (see requirements.txt for explanation):
+    #   llm_blender — broken with transformers>=4.45
+    #   mergekit    — conflicts with accelerate>=1.7

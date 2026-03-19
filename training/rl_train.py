@@ -228,7 +228,7 @@ def main():
         quantization_config=bnb_config,
         device_map="auto",
         token=hf_token,
-        attn_implementation="eager",
+        attn_implementation="sdpa",   # eager materializes O(seq²) attn matrix → OOM
     )
     model = PeftModel.from_pretrained(base_model, sft_checkpoint, is_trainable=True)
     tokenizer = AutoTokenizer.from_pretrained(sft_checkpoint)
@@ -274,7 +274,7 @@ def main():
         per_device_train_batch_size=cfg.rl.per_device_train_batch_size,
         gradient_accumulation_steps=cfg.rl.gradient_accumulation_steps,
         max_steps=cfg.rl.max_steps,
-        max_completion_length=1024,
+        max_completion_length=512,    # 1024 OOMs with 4 generations on 80GB
         bf16=True,
         logging_steps=5,
         save_steps=20,

@@ -1,16 +1,26 @@
 # pip dependencies (conda users: use environment.yml instead)
 # Note: pythonocc-core must be installed via conda (conda-forge), not pip.
 # Note: pytorch must match your CUDA version; see https://pytorch.org/get-started/locally/
+#
+# Version notes:
+#   transformers>=4.51.3  — unsloth requires >=4.51.3; transformers 5.x works fine
+#   trl==0.29.0           — defines its own _is_package_available (compatible with transformers 5.x)
+#                           trl<=0.24.0 imports it from transformers and breaks with 5.x API change
+#   NO llm_blender        — broken with transformers>=4.45 (imports removed TRANSFORMERS_CACHE)
+#                           TRL treats it as optional; _AutoStub in rl_train.py handles the stub
+#   NO mergekit           — conflicts with accelerate>=1.7; not needed for SFT or RL training
 
-unsloth[colab-new]         # or unsloth[cu121] for CUDA 12.1
-transformers>=4.51.3       # 5.x compatible; unsloth requires >=4.51.3
-trl==0.29.0                # GRPOTrainer — compatible with transformers 5.x (defines its own _is_package_available)
+unsloth                    # SFT only; conflicts with trl>0.24.0 but SFT runs first
+transformers>=4.51.3
+trl==0.29.0
 peft>=0.10
+accelerate                 # required by transformers trainer
 sentence-transformers      # SentenceTransformer for RAG embeddings
 faiss-cpu                  # FAISS retrieval (CPU is fine — only queried once, pre-training)
 open3d                     # FPFH + RANSAC + ICP alignment
 scipy                      # cKDTree for Chamfer Distance
-bitsandbytes               # 8-bit AdamW
+bitsandbytes               # 4-bit/8-bit quantization
+datasets
 pandas
 loguru
 omegaconf

@@ -70,6 +70,8 @@ grep -qF "PIP_CACHE_DIR" ~/.bashrc \
     || echo "export PIP_CACHE_DIR=$VOLUME/.pip-cache" >> ~/.bashrc
 grep -qF "HF_HOME" ~/.bashrc \
     || echo "export HF_HOME=$VOLUME/.hf-cache" >> ~/.bashrc
+grep -qF "PYTORCH_ALLOC_CONF" ~/.bashrc \
+    || echo "export PYTORCH_ALLOC_CONF=expandable_segments:True" >> ~/.bashrc
 
 # ── stepforge conda env ────────────────────────────────────────────────────────
 # open3d is installed via pip below (same package, avoids conda-forge solver overhead)
@@ -98,8 +100,6 @@ pip install --quiet --no-cache-dir --root-user-action=ignore \
     "pillow" \
     "accelerate" \
     "gradio" \
-    "mergekit" \
-    "llm_blender" \
     "transformers>=4.51.3" \
     "trl==0.29.0" \
     "peft>=0.10" \
