@@ -3,8 +3,8 @@
 # Note: pytorch must match your CUDA version; see https://pytorch.org/get-started/locally/
 
 unsloth[colab-new]         # or unsloth[cu121] for CUDA 12.1
-transformers>=4.40
-trl==0.24.0                # GRPOTrainer — max version compatible with unsloth; mergekit+llm_blender required
+transformers>=4.51.3       # 5.x compatible; unsloth requires >=4.51.3
+trl==0.29.0                # GRPOTrainer — compatible with transformers 5.x (defines its own _is_package_available)
 peft>=0.10
 sentence-transformers      # SentenceTransformer for RAG embeddings
 faiss-cpu                  # FAISS retrieval (CPU is fine — only queried once, pre-training)
