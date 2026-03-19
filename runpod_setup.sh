@@ -97,7 +97,7 @@ pip install --quiet --no-cache-dir --root-user-action=ignore \
     "mergekit" \
     "llm_blender" \
     "transformers>=4.40" \
-    "trl==0.9.6" \
+    "trl==0.24.0" \
     "peft>=0.10" \
     "datasets" \
     "sentence-transformers" \
