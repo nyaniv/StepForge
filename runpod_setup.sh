@@ -36,6 +36,9 @@ export VOLUME REPO
 echo "==> REPO   = $REPO"
 echo "==> VOLUME = $VOLUME"
 
+# ── System dependencies ────────────────────────────────────────────────────────
+apt-get install -y unzip curl > /dev/null 2>&1
+
 # ── Miniforge ──────────────────────────────────────────────────────────────────
 # Install on the container disk (fast local SSD, 100GB) — NOT the network volume.
 # Only data + checkpoints go on the network volume (persistent).
@@ -95,15 +98,9 @@ pip install --quiet --no-cache-dir --root-user-action=ignore \
     "tqdm" \
     "huggingface_hub"
 
-# Install correct unsloth CUDA variant (cap at cu126 — highest currently supported extra)
-CUDA_VER=$(python -c "import torch; v=torch.version.cuda; print(v.replace('.','')[:3])" 2>/dev/null || echo "124")
-KNOWN_UNSLOTH_EXTRAS="cu121 cu122 cu123 cu124 cu125 cu126"
-if ! echo "$KNOWN_UNSLOTH_EXTRAS" | grep -qw "cu${CUDA_VER}"; then
-    echo "==> unsloth has no cu${CUDA_VER} extra; using cu124..."
-    CUDA_VER="124"
-fi
-echo "==> Installing unsloth[cu${CUDA_VER}]..."
-pip install --quiet --no-cache-dir --root-user-action=ignore "unsloth[cu${CUDA_VER}]" --upgrade
+# Install unsloth — newer versions dropped the cuXXX extras, just use base package
+echo "==> Installing unsloth..."
+pip install --quiet --no-cache-dir --root-user-action=ignore "unsloth" --upgrade
 
 # ── Output directories ─────────────────────────────────────────────────────────
 echo "==> Creating output directories..."
