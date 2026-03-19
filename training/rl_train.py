@@ -26,17 +26,30 @@ Usage:
 
 import argparse
 import glob
+import importlib
+import inspect
 import json
 import os
 import sys
+import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Inject stubs for TRL optional dependencies before import.
+# TRL 0.24.0+ imports these unconditionally at module load time with bare
+# import statements rather than guarded try/except blocks.
+for _m in ["weave", "llm_blender", "mergekit", "liger_kernel"]:
+    if _m not in sys.modules:
+        try:
+            importlib.import_module(_m)
+        except ImportError:
+            sys.modules[_m] = types.ModuleType(_m)
 
 import torch
 from datasets import Dataset
 from loguru import logger
 from omegaconf import OmegaConf
-from peft import LoraConfig, PeftModel, get_peft_model
+from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from trl import GRPOConfig, GRPOTrainer
 
@@ -180,7 +193,6 @@ def main():
     # Note: TRL >=0.9 renamed kl_coef → beta; pass both for compatibility.
     os.makedirs(cfg.paths.rl_checkpoint_dir, exist_ok=True)
 
-    import inspect
     grpo_params = inspect.signature(GRPOConfig.__init__).parameters
     kl_kwarg = "beta" if "beta" in grpo_params else "kl_coef"
     optional_kwargs = {}
@@ -204,9 +216,6 @@ def main():
     )
 
     model.config.use_cache = False
-
-    if not hasattr(model, "warnings_issued"):
-        model.warnings_issued = {}
 
     trainer = GRPOTrainer(
         model=model,
