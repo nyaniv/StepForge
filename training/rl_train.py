@@ -56,6 +56,7 @@ class _AutoStub(types.ModuleType):
         super().__init__(name)
         self.__spec__ = importlib.machinery.ModuleSpec(name, loader=None, is_package=True)
         self.__path__: list = []
+        self.__file__ = f"<stub:{name}>"  # prevents inspect.getfile raising TypeError
 
     def __getattr__(self, name: str) -> "types.ModuleType":
         child_name = f"{self.__name__}.{name}"
