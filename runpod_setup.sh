@@ -37,7 +37,7 @@ echo "==> REPO   = $REPO"
 echo "==> VOLUME = $VOLUME"
 
 # ── System dependencies ────────────────────────────────────────────────────────
-apt-get install -y unzip curl > /dev/null 2>&1
+apt-get update -qq && apt-get install -y unzip curl > /dev/null 2>&1
 
 # ── Miniforge ──────────────────────────────────────────────────────────────────
 # Install on the container disk (fast local SSD, 100GB) — NOT the network volume.
