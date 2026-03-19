@@ -35,15 +35,55 @@ import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Inject stubs for TRL optional dependencies before import.
-# TRL 0.24.0+ imports these unconditionally at module load time with bare
-# import statements rather than guarded try/except blocks.
+# Inject resilient stubs for TRL optional dependencies before import.
+# TRL guards these imports with is_X_available() checks, but some versions or
+# partially-installed packages can still trigger bare imports. The _AutoStub
+# class handles attribute access and submodule imports gracefully so that
+# `from weave import EvaluationLogger` or `from weave.trace.context import ...`
+# never raises AttributeError/ImportError regardless of what TRL attempts.
+class _AutoStub(types.ModuleType):
+    """Stub module that auto-creates attributes and submodules on demand."""
+    __path__: list = []  # marks this as a package so submodule imports resolve
+
+    def __getattr__(self, name: str) -> "types.ModuleType":
+        child_name = f"{self.__name__}.{name}"
+        child = _AutoStub(child_name)
+        sys.modules[child_name] = child
+        object.__setattr__(self, name, child)
+        return child
+
+    def __call__(self, *args, **kwargs):
+        return None
+
+    def __bool__(self):
+        return False
+
+
 for _m in ["weave", "llm_blender", "mergekit", "liger_kernel"]:
     if _m not in sys.modules:
         try:
             importlib.import_module(_m)
         except ImportError:
-            sys.modules[_m] = types.ModuleType(_m)
+            stub = _AutoStub(_m)
+            sys.modules[_m] = stub
+            # Pre-register known submodules TRL may import from directly
+            # (e.g. `from weave.trace.context import weave_client_context`)
+            if _m == "weave":
+                trace = _AutoStub("weave.trace")
+                context = _AutoStub("weave.trace.context")
+                sys.modules["weave.trace"] = trace
+                sys.modules["weave.trace.context"] = context
+                stub.trace = trace
+                trace.context = context
+            elif _m == "liger_kernel":
+                chunked = _AutoStub("liger_kernel.chunked_loss")
+                sys.modules["liger_kernel.chunked_loss"] = chunked
+                stub.chunked_loss = chunked
+            elif _m == "mergekit":
+                for sub in ["config", "merge"]:
+                    child = _AutoStub(f"mergekit.{sub}")
+                    sys.modules[f"mergekit.{sub}"] = child
+                    object.__setattr__(stub, sub, child)
 
 import torch
 from datasets import Dataset
