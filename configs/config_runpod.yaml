@@ -46,13 +46,13 @@ sft:
   optim: "adamw_8bit"               # paper
 
 rl:
-  num_generations: 8                # paper
+  num_generations: 4                # paper says reduce to 4 on single GPU (OOM with 8)
   kl_coef: 0.02                     # paper
   entropy_coef: 0.005               # paper
   learning_rate: 3.0e-6             # paper
-  per_device_train_batch_size: 2    # 2 on A100 80GB (was 1)
-  gradient_accumulation_steps: 4    # 4 on A100 80GB (was 8)
-  max_steps: 80                     # paper
+  per_device_train_batch_size: 1    # reduced from 2 to fit 80GB with 4 generations
+  gradient_accumulation_steps: 8    # 8 to keep effective batch=8 (1×8)
+  max_steps: 160                    # paper says increase to 160 on single GPU
   reward:
     delta_low: 0.01                 # paper
     delta_high: 0.5                 # paper
