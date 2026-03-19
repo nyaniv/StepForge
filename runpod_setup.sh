@@ -101,6 +101,7 @@ pip install --quiet --no-cache-dir --root-user-action=ignore \
     "mergekit" \
     "llm_blender" \
     "transformers>=4.40" \
+    "tokenizers>=0.20,<0.21" \
     "trl==0.24.0" \
     "peft>=0.10" \
     "datasets" \
