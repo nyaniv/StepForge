@@ -53,26 +53,25 @@ fi
 # Make conda available in this shell
 source "$MINIFORGE/etc/profile.d/conda.sh"
 
-# Redirect caches to network volume — prevents filling the container disk
+# Redirect pip cache to network volume (large downloads, persist across restarts)
+# NOTE: conda packages stay on local disk — putting CONDA_PKGS_DIRS on the network
+# volume causes cross-filesystem hardlink failures → silent hang during env creation.
 export PIP_CACHE_DIR="$VOLUME/.pip-cache"
-export CONDA_PKGS_DIRS="$VOLUME/.conda-pkgs"
 
 # Persist for interactive sessions
 grep -qF "miniforge/etc/profile.d/conda.sh" ~/.bashrc \
     || echo "source $MINIFORGE/etc/profile.d/conda.sh" >> ~/.bashrc
 grep -qF "PIP_CACHE_DIR" ~/.bashrc \
     || echo "export PIP_CACHE_DIR=$VOLUME/.pip-cache" >> ~/.bashrc
-grep -qF "CONDA_PKGS_DIRS" ~/.bashrc \
-    || echo "export CONDA_PKGS_DIRS=$VOLUME/.conda-pkgs" >> ~/.bashrc
 
 # ── stepforge conda env ────────────────────────────────────────────────────────
+# open3d is installed via pip below (same package, avoids conda-forge solver overhead)
 if conda env list | grep -q "^stepforge "; then
     echo "==> conda env 'stepforge' already exists"
 else
-    echo "==> Creating stepforge env (Python 3.11 + conda-forge packages)..."
+    echo "==> Creating stepforge env (Python 3.11 + pythonocc-core from conda-forge)..."
     conda create -n stepforge python=3.11 \
         pythonocc-core=7.7.2 \
-        open3d \
         -c conda-forge -y
 fi
 
@@ -81,6 +80,7 @@ conda activate stepforge
 # ── pip packages (into stepforge) ─────────────────────────────────────────────
 echo "==> Installing pip packages into stepforge..."
 pip install --quiet --no-cache-dir --root-user-action=ignore \
+    "open3d" \
     "transformers>=4.40" \
     "trl>=0.8.6" \
     "peft>=0.10" \
