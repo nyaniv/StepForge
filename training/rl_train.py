@@ -274,7 +274,7 @@ def main():
         per_device_train_batch_size=cfg.rl.per_device_train_batch_size,
         gradient_accumulation_steps=cfg.rl.gradient_accumulation_steps,
         max_steps=cfg.rl.max_steps,
-        max_completion_length=512,    # 1024 OOMs with 4 generations on 80GB
+        max_completion_length=1024,   # sdpa avoids O(seq²) matrix → fits 80GB
         bf16=True,
         logging_steps=5,
         save_steps=20,
