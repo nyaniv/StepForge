@@ -26,10 +26,12 @@ Usage:
 
 import argparse
 import glob
+import importlib.machinery
 import inspect
 import json
 import os
 import sys
+import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -38,6 +40,46 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if "HF_HOME" not in os.environ:
     _vol = os.environ.get("VOLUME", "/runpod-volume")
     os.environ["HF_HOME"] = os.path.join(_vol, ".hf-cache")
+
+# Pre-stub optional TRL dependencies that may be installed-but-broken or
+# missing.  Must happen before `from trl import ...` so that:
+#   1. `import llm_blender` inside TRL's is_llm_blender_available() guard hits
+#      the stub (sys.modules is checked before the filesystem).
+#   2. `importlib.util.find_spec(name)` works without ValueError — that call
+#      also checks sys.modules first and requires __spec__ to be non-None.
+#
+# _AutoStub auto-creates child stubs for any attribute/submodule access so
+# `from weave.trace.context import X` and similar deep imports don't raise.
+
+class _AutoStub(types.ModuleType):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.__spec__ = importlib.machinery.ModuleSpec(name, loader=None, is_package=True)
+        self.__path__: list = []
+
+    def __getattr__(self, name: str) -> "types.ModuleType":
+        child_name = f"{self.__name__}.{name}"
+        child = _AutoStub(child_name)
+        sys.modules[child_name] = child
+        object.__setattr__(self, name, child)
+        return child
+
+    def __call__(self, *args, **kwargs):
+        return None
+
+    def __bool__(self) -> bool:
+        return False
+
+
+for _pkg in ["weave", "llm_blender", "mergekit", "liger_kernel"]:
+    if _pkg not in sys.modules:
+        try:
+            __import__(_pkg)
+        except Exception:
+            # Catches both ModuleNotFoundError (not installed) and
+            # ImportError from broken internal imports (e.g. llm_blender
+            # referencing the removed transformers.TRANSFORMERS_CACHE).
+            sys.modules[_pkg] = _AutoStub(_pkg)
 
 import torch
 from datasets import Dataset
