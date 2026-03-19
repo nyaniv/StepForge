@@ -61,6 +61,7 @@ class _AutoStub(types.ModuleType):
         self.__spec__ = importlib.machinery.ModuleSpec(name, loader=None, is_package=True)
         self.__path__: list = []
         self.__file__ = f"<stub:{name}>"  # prevents inspect.getfile raising TypeError
+        self.__version__ = "0.0.0"        # prevents Version(stub) TypeError in TRL availability checks
 
     def __getattr__(self, name: str) -> "types.ModuleType":
         child_name = f"{self.__name__}.{name}"
