@@ -200,6 +200,11 @@ def main():
         report_to="none",
     )
 
+    # Disable KV cache so Unsloth uses full forward pass during GRPO generation.
+    # Without this, Unsloth's fast_forward_inference path causes a shape mismatch
+    # ([batch, heads, 1, dim] vs [batch, heads, seq_len, dim]) during generation.
+    model.config.use_cache = False
+
     if not hasattr(model, "warnings_issued"):
         model.warnings_issued = {}
 
