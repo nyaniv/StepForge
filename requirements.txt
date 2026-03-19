@@ -4,7 +4,7 @@
 
 unsloth[colab-new]         # or unsloth[cu121] for CUDA 12.1
 transformers>=4.40
-trl>=0.8.6                 # GRPOTrainer
+trl==0.9.6                 # GRPOTrainer — pinned to avoid cascading optional dep issues in newer versions
 peft>=0.10
 sentence-transformers      # SentenceTransformer for RAG embeddings
 faiss-cpu                  # FAISS retrieval (CPU is fine — only queried once, pre-training)

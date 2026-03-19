@@ -95,8 +95,9 @@ pip install --quiet --no-cache-dir --root-user-action=ignore \
     "accelerate" \
     "gradio" \
     "mergekit" \
+    "llm_blender" \
     "transformers>=4.40" \
-    "trl>=0.8.6" \
+    "trl==0.9.6" \
     "peft>=0.10" \
     "datasets" \
     "sentence-transformers" \
