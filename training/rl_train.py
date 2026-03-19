@@ -32,13 +32,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import unsloth  # must be first
 import torch
 from datasets import Dataset
 from loguru import logger
 from omegaconf import OmegaConf
+from peft import LoraConfig, PeftModel, get_peft_model
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from trl import GRPOConfig, GRPOTrainer
-from unsloth import FastLanguageModel
 
 from retrieval.retriever import Retriever
 from reward.scd_reward import compute_reward
@@ -135,21 +135,24 @@ def main():
         )
 
     # ── Load SFT model (cold-start for RL) ──────────────────────────────────
+    # Use standard transformers + bitsandbytes instead of Unsloth to avoid
+    # Unsloth's fast_forward_inference shape mismatch during GRPO generation.
     logger.info(f"Loading SFT checkpoint from {sft_checkpoint}...")
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=sft_checkpoint,
-        max_seq_length=cfg.model.max_seq_length,
+    bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
     )
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=cfg.model.lora_r,
-        lora_alpha=cfg.model.lora_alpha,
-        target_modules=["q_proj", "v_proj", "k_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
-        lora_dropout=cfg.model.lora_dropout,
-        bias="none",
+    base_model = AutoModelForCausalLM.from_pretrained(
+        cfg.model.base_model,
+        quantization_config=bnb_config,
+        device_map="auto",
+        token=hf_token,
+        attn_implementation="eager",
     )
+    model = PeftModel.from_pretrained(base_model, sft_checkpoint, is_trainable=True)
+    tokenizer = AutoTokenizer.from_pretrained(sft_checkpoint)
 
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"  # GRPO requires left-padding
@@ -200,9 +203,6 @@ def main():
         report_to="none",
     )
 
-    # Disable KV cache so Unsloth uses full forward pass during GRPO generation.
-    # Without this, Unsloth's fast_forward_inference path causes a shape mismatch
-    # ([batch, heads, 1, dim] vs [batch, heads, seq_len, dim]) during generation.
     model.config.use_cache = False
 
     if not hasattr(model, "warnings_issued"):
