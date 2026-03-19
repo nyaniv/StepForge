@@ -84,6 +84,7 @@ conda activate stepforge
 echo "==> Installing pip packages into stepforge..."
 pip install --quiet --no-cache-dir --root-user-action=ignore \
     "open3d" \
+    "trimesh" \
     "transformers>=4.40" \
     "trl>=0.8.6" \
     "peft>=0.10" \
