@@ -94,6 +94,7 @@ pip install --quiet --no-cache-dir --root-user-action=ignore \
     "pillow" \
     "accelerate" \
     "gradio" \
+    "mergekit" \
     "transformers>=4.40" \
     "trl>=0.8.6" \
     "peft>=0.10" \
