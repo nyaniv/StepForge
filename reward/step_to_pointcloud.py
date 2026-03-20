@@ -40,11 +40,18 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
             f.write(step_content)
 
-        from OCC.Core.STEPControl import STEPControl_Reader
-        from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
-        from OCC.Core.TopExp import TopExp_Explorer
-        from OCC.Core.TopAbs import TopAbs_FACE
-        from OCC.Core.BRep import BRep_Tool
+        try:
+            from OCC.Core.STEPControl import STEPControl_Reader
+            from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+            from OCC.Core.TopExp import TopExp_Explorer
+            from OCC.Core.TopAbs import TopAbs_FACE
+            from OCC.Core.BRep import BRep_Tool
+        except ImportError:
+            from OCP.STEPControl import STEPControl_Reader
+            from OCP.BRepMesh import BRepMesh_IncrementalMesh
+            from OCP.TopExp import TopExp_Explorer
+            from OCP.TopAbs import TopAbs_FACE
+            from OCP.BRep import BRep_Tool
 
         reader = STEPControl_Reader()
         status = reader.ReadFile(tmp_path)
