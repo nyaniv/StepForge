@@ -16,11 +16,18 @@ Eq. 3 — Piecewise linear reward:
     R_geo(scd) = (δ_high - scd) / (δ_high - δ_low)  otherwise
 """
 
+import multiprocessing as mp
+
 import numpy as np
 from scipy.spatial import cKDTree
 
 from reward.alignment import align_point_clouds
 from reward.step_to_pointcloud import step_to_pointcloud
+
+# Minimum unique points required before running Open3D registration.
+# Below this threshold the cloud is degenerate (sampled with replacement
+# from very few mesh vertices) and RANSAC/ICP will segfault.
+_MIN_UNIQUE_POINTS = 50
 
 
 # ── Eq. 1: Bidirectional Chamfer Distance ─────────────────────────────────────
@@ -62,6 +69,19 @@ def r_geo(scd: float,
     return (delta_high - scd) / (delta_high - delta_low)
 
 
+# ── Subprocess worker (isolates Open3D segfaults) ─────────────────────────────
+
+def _scd_worker(queue: mp.Queue, pred_pc: np.ndarray, gt_pc: np.ndarray,
+                delta_low: float, delta_high: float) -> None:
+    """Run SCD in a child process so a segfault cannot kill the trainer."""
+    try:
+        scd = scaled_chamfer_distance(pred_pc, gt_pc)
+        reward = r_geo(scd, delta_low=delta_low, delta_high=delta_high) if np.isfinite(scd) else 0.0
+    except Exception:
+        reward = 0.0
+    queue.put(reward)
+
+
 # ── Full reward pipeline ───────────────────────────────────────────────────────
 
 def compute_reward(
@@ -76,6 +96,8 @@ def compute_reward(
     Full reward pipeline.  Returns 0.0 for any failure — never raises.
 
     Fast-path: if the generated STEP doesn't have the terminator, skip OCC entirely.
+    Open3D alignment runs in a subprocess to isolate segfaults from degenerate
+    point clouds so a crash cannot kill the training process.
     """
     if "END-ISO-10303-21;" not in generated_step:
         return 0.0
@@ -88,12 +110,21 @@ def compute_reward(
     if pred_pc is None or gt_pc is None:
         return 0.0
 
-    try:
-        scd = scaled_chamfer_distance(pred_pc, gt_pc)
-    except Exception:
+    # Reject degenerate clouds — Open3D RANSAC/ICP segfaults when unique
+    # points are too few (e.g. when step_to_pointcloud had to sample with
+    # heavy replacement from a near-empty mesh).
+    if (len(np.unique(pred_pc, axis=0)) < _MIN_UNIQUE_POINTS or
+            len(np.unique(gt_pc, axis=0)) < _MIN_UNIQUE_POINTS):
         return 0.0
 
-    if not np.isfinite(scd):
+    # Run alignment + Chamfer in a subprocess to survive any C++ segfault.
+    queue: mp.Queue = mp.Queue()
+    proc = mp.Process(target=_scd_worker,
+                      args=(queue, pred_pc, gt_pc, delta_low, delta_high))
+    proc.start()
+    proc.join(timeout=60)  # 60 s hard cap per reward call
+
+    if proc.exitcode != 0 or queue.empty():
         return 0.0
 
-    return r_geo(scd, delta_low=delta_low, delta_high=delta_high)
+    return queue.get()
