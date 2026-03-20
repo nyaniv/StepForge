@@ -55,12 +55,15 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
             from OCC.Core.TopExp import TopExp_Explorer
             from OCC.Core.TopAbs import TopAbs_FACE
             from OCC.Core.BRep import BRep_Tool
+            from OCC.Core.TopoDS import topods_Face
         except ImportError:
             from OCP.STEPControl import STEPControl_Reader
             from OCP.BRepMesh import BRepMesh_IncrementalMesh
             from OCP.TopExp import TopExp_Explorer
             from OCP.TopAbs import TopAbs_FACE
             from OCP.BRep import BRep_Tool
+            from OCP.TopoDS import TopoDS
+            topods_Face = TopoDS.Face_s
 
         reader = STEPControl_Reader()
         status = reader.ReadFile(tmp_path)
@@ -78,7 +81,7 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
         all_pts = []
         explorer = TopExp_Explorer(shape, TopAbs_FACE)
         while explorer.More():
-            face = explorer.Current()
+            face = topods_Face(explorer.Current())
             tri = (BRep_Tool.Triangulation_s(face, face.Location())
                if hasattr(BRep_Tool, "Triangulation_s")
                else BRep_Tool.Triangulation(face, face.Location()))
