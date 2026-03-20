@@ -9,6 +9,7 @@ Never raises — returns None on any failure so reward can safely return 0.0.
 """
 
 import os
+import re
 import sys
 import tempfile
 
@@ -33,6 +34,10 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
         for p in [text2cad_src, parent]:
             if p not in sys.path:
                 sys.path.insert(0, p)
+
+    # Strip /* ... */ comments — added by dfs_reserializer as tree annotations
+    # but not supported by OCC/OCP's strict STEP parser.
+    step_content = re.sub(r"/\*.*?\*/", "", step_content, flags=re.DOTALL)
 
     # Write to temp file (OCC requires a file path, not a string)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".step")
