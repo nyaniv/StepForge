@@ -30,7 +30,8 @@ class Retriever:
         """
         logger.info(f"Loading FAISS index from {index_path}")
         self.index = faiss.read_index(index_path)
-        self.records = pickle.load(open(metadata_path, "rb"))
+        with open(metadata_path, "rb") as fh:
+            self.records = pickle.load(fh)
         self.model = SentenceTransformer(model_name)
         logger.info(f"Retriever ready: {len(self.records)} training examples indexed")
 

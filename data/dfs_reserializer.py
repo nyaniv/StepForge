@@ -14,7 +14,6 @@ Three transformations applied:
 """
 
 import re
-import sys
 
 
 def reserialize(header: str, entities: dict, referenced_by: dict) -> str:
@@ -37,15 +36,18 @@ def reserialize(header: str, entities: dict, referenced_by: dict) -> str:
     visited = set()
     output_order = []
 
-    def dfs(node_id):
-        if node_id in visited or node_id not in entities:
-            return
-        visited.add(node_id)
-        output_order.append(node_id)
-        for child_id in entities[node_id]["refs"]:
-            dfs(child_id)  # recurse depth-first
+    def dfs(start_id):
+        stack = [start_id]
+        while stack:
+            node_id = stack.pop()
+            if node_id in visited or node_id not in entities:
+                continue
+            visited.add(node_id)
+            output_order.append(node_id)
+            for child_id in reversed(entities[node_id]["refs"]):
+                if child_id not in visited:
+                    stack.append(child_id)
 
-    sys.setrecursionlimit(100000)
     for root in roots:
         dfs(root)
 

@@ -44,7 +44,7 @@ def scaled_chamfer_distance(pred: np.ndarray, gt: np.ndarray) -> float:
     scale_factor = float(np.sqrt(np.mean(np.sum(gt_centered ** 2, axis=1))))
     if scale_factor < 1e-8:
         return float("inf")
-    pred_aligned = align_point_clouds(pred, gt)
+    pred_aligned = align_point_clouds(pred, gt_centered)
     cd = chamfer_distance(pred_aligned, gt_centered)
     return cd / (scale_factor ** 2)
 

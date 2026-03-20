@@ -32,7 +32,8 @@ def precompute_rag(train_jsonl: str, retriever: Retriever, output_jsonl: str):
     Enrich every training record with its pre-retrieved STEP.
     Uses exclude_uid to prevent self-retrieval.
     """
-    records = [json.loads(l) for l in open(train_jsonl)]
+    with open(train_jsonl) as f:
+        records = [json.loads(l) for l in f]
     logger.info(f"Pre-computing RAG for {len(records)} training examples...")
 
     for record in tqdm(records, desc="Pre-computing RAG"):

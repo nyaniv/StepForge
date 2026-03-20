@@ -75,10 +75,11 @@ def build_prompt(caption: str, retrieved_step: str, ground_truth_step: str = "")
     return prompt
 
 
-def tokenize_and_mask(example: dict, tokenizer, max_seq_length: int) -> dict:
+def tokenize_and_mask(example: dict, tokenizer, max_seq_length: int) -> dict | None:
     """
     Tokenize and apply loss masking.
     Labels for prompt tokens are set to -100 (excluded from loss).
+    Returns None if the prompt fills the entire context (nothing to train on).
     """
     prompt = build_prompt(example["caption"], example["retrieved_step"])
     full   = build_prompt(example["caption"], example["retrieved_step"],
@@ -92,9 +93,16 @@ def tokenize_and_mask(example: dict, tokenizer, max_seq_length: int) -> dict:
         add_special_tokens=False,
     )["input_ids"]
 
-    labels = [-100] * len(prompt_ids) + full_ids[len(prompt_ids):]
+    prompt_len = min(len(prompt_ids), len(full_ids))
 
-    # Pad/truncate labels to same length as input_ids
+    if prompt_len >= len(full_ids):
+        logger.warning(
+            f"Skipping example (prompt fills context): uid={example.get('uid', '?')}, "
+            f"prompt_len={len(prompt_ids)}, max_seq_length={max_seq_length}"
+        )
+        return None
+
+    labels = [-100] * prompt_len + full_ids[prompt_len:]
     labels = labels[:max_seq_length]
 
     return {
@@ -145,11 +153,14 @@ def main():
     # ── Load training data ───────────────────────────────────────────────────
     train_jsonl = os.path.join(cfg.paths.processed_dir, "train_with_rag.jsonl")
     logger.info(f"Loading training data from {train_jsonl}")
-    records = [json.loads(l) for l in open(train_jsonl)]
+    with open(train_jsonl) as f:
+        records = [json.loads(l) for l in f]
 
     def gen():
         for r in records:
-            yield tokenize_and_mask(r, tokenizer, cfg.model.max_seq_length)
+            result = tokenize_and_mask(r, tokenizer, cfg.model.max_seq_length)
+            if result is not None:
+                yield result
 
     train_dataset = Dataset.from_generator(gen)
     logger.info(f"Training examples: {len(train_dataset)}")

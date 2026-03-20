@@ -48,7 +48,8 @@ def pair_captions(caption_csv: str, step_output_dir: str, output_jsonl: str):
         if pd.isna(row["abstract"]) or str(row["abstract"]).strip() == "":
             missing_caption += 1
             continue
-        step_content = open(row["step_path"], errors="replace").read()
+        with open(row["step_path"], errors="replace") as fh:
+            step_content = fh.read()
         records.append({
             "uid": row["uid"],
             "caption": str(row["abstract"]).strip(),

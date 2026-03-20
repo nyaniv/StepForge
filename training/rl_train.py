@@ -26,13 +26,10 @@ Usage:
 
 import argparse
 import glob
-import importlib.abc
-import importlib.machinery
 import inspect
 import json
 import os
 import sys
-import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -41,75 +38,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if "HF_HOME" not in os.environ:
     _vol = os.environ.get("VOLUME", "/runpod-volume")
     os.environ["HF_HOME"] = os.path.join(_vol, ".hf-cache")
-
-# Pre-stub optional TRL dependencies that may be installed-but-broken or missing.
-#
-# Problem: TRL has bare `import X` / `from X.sub import Y` statements for
-# optional packages (weave, llm_blender, mergekit, liger_kernel). When these
-# packages are absent or internally broken the import chain aborts.
-#
-# Solution:
-#   1. _AutoStub — a module subclass that silently absorbs any attribute/call.
-#   2. _StubFinder — a MetaPathFinder registered on sys.meta_path that intercepts
-#      ALL import attempts whose root package is a known stub. This handles both
-#      `import weave` AND `from weave.trace.context import X` (submodule imports
-#      go through the finder, not __getattr__, so __getattr__ alone is insufficient).
-
-class _AutoStub(types.ModuleType):
-    def __init__(self, name: str) -> None:
-        super().__init__(name)
-        self.__spec__ = importlib.machinery.ModuleSpec(name, loader=None, is_package=True)
-        self.__path__: list = []
-        self.__file__ = f"<stub:{name}>"  # prevents inspect.getfile raising TypeError
-        self.__version__ = "0.0.0"        # prevents Version(stub) TypeError in TRL availability checks
-
-    def __getattr__(self, name: str) -> "types.ModuleType":
-        child_name = f"{self.__name__}.{name}"
-        child = _AutoStub(child_name)
-        sys.modules[child_name] = child
-        object.__setattr__(self, name, child)
-        return child
-
-    def __call__(self, *args, **kwargs):
-        return None
-
-    def __bool__(self) -> bool:
-        return False
-
-
-class _StubLoader(importlib.abc.Loader):
-    def create_module(self, spec: importlib.machinery.ModuleSpec) -> _AutoStub:
-        return _AutoStub(spec.name)
-
-    def exec_module(self, module: types.ModuleType) -> None:
-        pass  # stub needs no execution
-
-
-class _StubFinder(importlib.abc.MetaPathFinder):
-    def __init__(self, roots: set) -> None:
-        self._roots = roots
-        self._loader = _StubLoader()
-
-    def find_spec(self, fullname: str, path, target=None):
-        if fullname.split(".")[0] in self._roots and fullname not in sys.modules:
-            return importlib.machinery.ModuleSpec(fullname, self._loader, is_package=True)
-        return None
-
-
-_stub_roots: set = set()
-for _pkg in ["weave", "llm_blender", "mergekit", "liger_kernel"]:
-    if _pkg not in sys.modules:
-        try:
-            __import__(_pkg)
-        except Exception:
-            # Catches ModuleNotFoundError (not installed) and ImportError from
-            # broken internal imports (e.g. llm_blender importing removed
-            # transformers.TRANSFORMERS_CACHE).
-            sys.modules[_pkg] = _AutoStub(_pkg)
-            _stub_roots.add(_pkg)
-
-if _stub_roots:
-    sys.meta_path.append(_StubFinder(_stub_roots))
 
 import torch
 from datasets import Dataset
@@ -171,7 +99,8 @@ def build_rl_dataset(train_jsonl: str, retriever: Retriever) -> Dataset:
     Each record includes a pre-formatted prompt (with live RAG) and
     the ground_truth_step for reward computation.
     """
-    records = [json.loads(l) for l in open(train_jsonl)]
+    with open(train_jsonl) as f:
+        records = [json.loads(l) for l in f]
     logger.info(f"Building RL dataset from {len(records)} examples (live RAG)...")
 
     data = []
@@ -274,7 +203,7 @@ def main():
         per_device_train_batch_size=cfg.rl.per_device_train_batch_size,
         gradient_accumulation_steps=cfg.rl.gradient_accumulation_steps,
         max_steps=cfg.rl.max_steps,
-        max_completion_length=1024,   # sdpa avoids O(seq²) matrix → fits 80GB
+        max_completion_length=4096,   # covers 40.9% of examples; sdpa fits 80GB
         bf16=True,
         logging_steps=5,
         save_steps=20,
@@ -282,6 +211,7 @@ def main():
     )
 
     model.config.use_cache = False
+    model.base_model.model.config.use_cache = False
 
     trainer = GRPOTrainer(
         model=model,

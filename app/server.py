@@ -9,6 +9,7 @@ Then open http://localhost:8000 in your browser.
 """
 
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -22,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from omegaconf import OmegaConf
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from inference.generate import generate_step
 from retrieval.retriever import Retriever
@@ -88,8 +90,21 @@ async def generate(req: GenerateRequest):
     tmp.write(step_content)
     tmp.close()
 
-    filename = caption[:40].replace(" ", "_").replace("/", "-") + ".step"
-    return FileResponse(tmp.name, filename=filename, media_type="application/octet-stream")
+    safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", caption[:40])
+    filename = (safe_name or "output") + ".step"
+
+    def cleanup():
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+    return FileResponse(
+        tmp.name,
+        filename=filename,
+        media_type="application/octet-stream",
+        background=BackgroundTask(cleanup),
+    )
 
 
 app.mount(
