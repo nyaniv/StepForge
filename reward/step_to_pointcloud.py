@@ -39,6 +39,10 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
     # but not supported by OCC/OCP's strict STEP parser.
     step_content = re.sub(r"/\*.*?\*/", "", step_content)
 
+    # Inject missing ENDSEC; before DATA; — dfs_reserializer omits the header
+    # section terminator, leaving the file with only one ENDSEC; (for DATA).
+    step_content = step_content.replace("DATA;", "ENDSEC;\nDATA;", 1)
+
     # Write to temp file (OCC requires a file path, not a string)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".step")
     try:
