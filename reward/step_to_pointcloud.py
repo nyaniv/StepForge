@@ -70,7 +70,9 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
         explorer = TopExp_Explorer(shape, TopAbs_FACE)
         while explorer.More():
             face = explorer.Current()
-            tri = BRep_Tool.Triangulation_s(face, face.Location())
+            tri = (BRep_Tool.Triangulation_s(face, face.Location())
+               if hasattr(BRep_Tool, "Triangulation_s")
+               else BRep_Tool.Triangulation(face, face.Location()))
             if tri is not None:
                 for i in range(1, tri.NbNodes() + 1):
                     node = tri.Node(i)
