@@ -37,7 +37,7 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
 
     # Strip /* ... */ comments — added by dfs_reserializer as tree annotations
     # but not supported by OCC/OCP's strict STEP parser.
-    step_content = re.sub(r"/\*.*?\*/", "", step_content, flags=re.DOTALL)
+    step_content = re.sub(r"/\*.*?\*/", "", step_content)
 
     # Write to temp file (OCC requires a file path, not a string)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".step")
