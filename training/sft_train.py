@@ -53,6 +53,10 @@ from transformers import Trainer, TrainingArguments, DataCollatorForSeq2Seq
 from unsloth import FastLanguageModel
 
 
+# Truncate retrieved STEP to this many tokens to leave room for GT STEP + EOS.
+# With max_seq_length=8192: prompt ≈ 1100 tokens, leaving ~7090 tokens for GT.
+MAX_RETRIEVED_TOKENS = 1000
+
 # ── Prompt helpers ─────────────────────────────────────────────────────────────
 
 SYSTEM_MSG = (
@@ -78,24 +82,48 @@ def build_prompt(caption: str, retrieved_step: str, ground_truth_step: str = "")
 def tokenize_and_mask(example: dict, tokenizer, max_seq_length: int) -> dict | None:
     """
     Tokenize and apply loss masking.
-    Labels for prompt tokens are set to -100 (excluded from loss).
-    Returns None if the prompt fills the entire context (nothing to train on).
-    """
-    prompt = build_prompt(example["caption"], example["retrieved_step"])
-    full   = build_prompt(example["caption"], example["retrieved_step"],
-                          example["step"])
 
-    prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
-    full_ids   = tokenizer(
-        full,
-        max_length=max_seq_length,
-        truncation=True,
-        add_special_tokens=False,
+    Two key fixes vs. the original:
+      1. Truncates retrieved_step to MAX_RETRIEVED_TOKENS so the GT STEP fits
+         within max_seq_length (original was truncating the GT STEP instead).
+      2. Appends EOS after the GT STEP so the model learns to terminate.
+
+    Skips examples where the full sequence (with EOS) still exceeds max_seq_length
+    after retrieved_step truncation, so every training example ends with EOS and
+    the model sees a complete STEP file.
+    """
+    # Truncate retrieved_step to leave room for the full GT STEP + EOS
+    retrieved_ids = tokenizer(
+        example["retrieved_step"], add_special_tokens=False
     )["input_ids"]
+    if len(retrieved_ids) > MAX_RETRIEVED_TOKENS:
+        retrieved_step = tokenizer.decode(
+            retrieved_ids[:MAX_RETRIEVED_TOKENS], skip_special_tokens=True
+        )
+    else:
+        retrieved_step = example["retrieved_step"]
+
+    prompt = build_prompt(example["caption"], retrieved_step)
+    full   = build_prompt(example["caption"], retrieved_step, example["step"])
+
+    prompt_ids   = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    full_ids_raw = tokenizer(full,   add_special_tokens=False)["input_ids"]
+
+    # Always append EOS so the model learns to terminate after the STEP file
+    full_ids = full_ids_raw + [tokenizer.eos_token_id]
+
+    # Skip if the complete sequence (with EOS) doesn't fit — avoids training on
+    # truncated outputs where the model would never see the terminator
+    if len(full_ids) > max_seq_length:
+        logger.warning(
+            f"Skipping example (too long even after retrieved_step truncation): "
+            f"uid={example.get('uid', '?')}, len={len(full_ids)}, max={max_seq_length}"
+        )
+        return None
 
     prompt_len = min(len(prompt_ids), len(full_ids))
 
-    if prompt_len >= len(full_ids):
+    if prompt_len >= len(full_ids) - 1:
         logger.warning(
             f"Skipping example (prompt fills context): uid={example.get('uid', '?')}, "
             f"prompt_len={len(prompt_ids)}, max_seq_length={max_seq_length}"
@@ -103,7 +131,6 @@ def tokenize_and_mask(example: dict, tokenizer, max_seq_length: int) -> dict | N
         return None
 
     labels = [-100] * prompt_len + full_ids[prompt_len:]
-    labels = labels[:max_seq_length]
 
     return {
         "input_ids": full_ids,
@@ -117,6 +144,10 @@ def tokenize_and_mask(example: dict, tokenizer, max_seq_length: int) -> dict | N
 def main():
     parser = argparse.ArgumentParser(description="SFT training for STEP-LLM")
     parser.add_argument("--config", default="configs/config.yaml")
+    parser.add_argument(
+        "--epochs", type=int, default=None,
+        help="Override num_train_epochs from config (e.g. 3 for quick fix SFT)",
+    )
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
@@ -167,11 +198,13 @@ def main():
 
     # ── Training arguments (paper Section 4.1) ───────────────────────────────
     os.makedirs(cfg.paths.sft_checkpoint_dir, exist_ok=True)
+    num_epochs = args.epochs if args.epochs is not None else cfg.sft.num_epochs
+    logger.info(f"Training for {num_epochs} epochs")
     training_args = TrainingArguments(
         output_dir=cfg.paths.sft_checkpoint_dir,
         per_device_train_batch_size=cfg.sft.per_device_train_batch_size,
         gradient_accumulation_steps=cfg.sft.gradient_accumulation_steps,
-        num_train_epochs=cfg.sft.num_epochs,
+        num_train_epochs=num_epochs,
         learning_rate=cfg.sft.learning_rate,
         lr_scheduler_type="linear",
         warmup_ratio=cfg.sft.warmup_ratio,

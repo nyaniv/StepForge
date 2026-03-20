@@ -69,7 +69,19 @@ def format_prompt(caption: str, retrieved_step: str) -> str:
     )
 
 
-# ── Reward function ────────────────────────────────────────────────────────────
+# ── Format reward (completion bonus) ──────────────────────────────────────────
+
+def format_reward_fn(completions: list[str], **kwargs) -> list[float]:
+    """
+    Small credit (0.2) for generating a syntactically complete STEP file.
+    Gives GRPO gradient signal even when geometry is wrong, encouraging the
+    model to learn to terminate with END-ISO-10303-21; before the geometric
+    reward can kick in.
+    """
+    return [0.2 if "END-ISO-10303-21;" in c else 0.0 for c in completions]
+
+
+# ── Geometry reward ────────────────────────────────────────────────────────────
 
 def make_reward_fn(text2cad_src: str, delta_low: float, delta_high: float,
                    n_points: int):
@@ -93,18 +105,25 @@ def make_reward_fn(text2cad_src: str, delta_low: float, delta_high: float,
 
 # ── Build RL dataset with live RAG ────────────────────────────────────────────
 
-def build_rl_dataset(train_jsonl: str, retriever: Retriever) -> Dataset:
+def build_rl_dataset(train_jsonl: str, retriever: Retriever,
+                     tokenizer, max_completion_length: int) -> Dataset:
     """
     Build the RL training dataset.
-    Each record includes a pre-formatted prompt (with live RAG) and
-    the ground_truth_step for reward computation.
+    Only includes examples where the GT STEP fits within max_completion_length
+    tokens — these are the only examples the model can possibly complete and
+    earn non-zero reward on.
     """
     with open(train_jsonl) as f:
         records = [json.loads(l) for l in f]
     logger.info(f"Building RL dataset from {len(records)} examples (live RAG)...")
 
     data = []
+    skipped = 0
     for record in records:
+        step_ids = tokenizer(record["step"], add_special_tokens=False)["input_ids"]
+        if len(step_ids) > max_completion_length:
+            skipped += 1
+            continue
         retrieved = retriever.retrieve(record["caption"], exclude_uid=record["uid"])
         prompt = format_prompt(record["caption"], retrieved["step"])
         data.append({
@@ -112,6 +131,10 @@ def build_rl_dataset(train_jsonl: str, retriever: Retriever) -> Dataset:
             "ground_truth_step": record["step"],
         })
 
+    logger.info(
+        f"RL dataset: {len(data)} examples kept, {skipped} skipped "
+        f"(GT step > {max_completion_length} tokens)"
+    )
     return Dataset.from_list(data)
 
 
@@ -174,7 +197,9 @@ def main():
 
     # ── Build RL dataset ─────────────────────────────────────────────────────
     train_jsonl = os.path.join(cfg.paths.processed_dir, "train.jsonl")
-    rl_dataset = build_rl_dataset(train_jsonl, retriever)
+    rl_dataset = build_rl_dataset(
+        train_jsonl, retriever, tokenizer, max_completion_length=4096
+    )
 
     # ── Reward function ──────────────────────────────────────────────────────
     reward_fn = make_reward_fn(
@@ -216,7 +241,7 @@ def main():
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
-        reward_funcs=[reward_fn],
+        reward_funcs=[format_reward_fn, reward_fn],
         args=grpo_config,
         train_dataset=rl_dataset,
     )
