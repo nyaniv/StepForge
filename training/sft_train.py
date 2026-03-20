@@ -44,13 +44,19 @@ if "HF_HOME" not in os.environ:
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import unsloth  # must be first to patch transformers before import
 import torch
 from datasets import Dataset
 from loguru import logger
 from omegaconf import OmegaConf
-from transformers import Trainer, TrainingArguments, DataCollatorForSeq2Seq
-from unsloth import FastLanguageModel
+from peft import LoraConfig, TaskType, get_peft_model
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    DataCollatorForSeq2Seq,
+    Trainer,
+    TrainingArguments,
+)
 
 
 # Truncate retrieved STEP to this many tokens to leave room for GT STEP + EOS.
@@ -159,25 +165,37 @@ def main():
             "Required for meta-llama/Llama-3.2-3B-Instruct gated access."
         )
 
-    # ── Load model with Unsloth ──────────────────────────────────────────────
-    logger.info(f"Loading {cfg.model.base_model} with Unsloth...")
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=cfg.model.base_model,
-        max_seq_length=cfg.model.max_seq_length,
+    # ── Load model (standard transformers + peft, no Unsloth) ───────────────
+    logger.info(f"Loading {cfg.model.base_model}...")
+    bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
-        token=hf_token,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
     )
+    base_model = AutoModelForCausalLM.from_pretrained(
+        cfg.model.base_model,
+        quantization_config=bnb_config,
+        device_map="auto",
+        token=hf_token,
+        attn_implementation="sdpa",
+    )
+    base_model.config.use_cache = False
+    base_model.enable_input_require_grads()  # required for gradient checkpointing with PEFT
 
-    model = FastLanguageModel.get_peft_model(
-        model,
+    lora_config = LoraConfig(
         r=cfg.model.lora_r,
         lora_alpha=cfg.model.lora_alpha,
         target_modules=["q_proj", "v_proj", "k_proj", "o_proj",
                         "gate_proj", "up_proj", "down_proj"],
         lora_dropout=cfg.model.lora_dropout,
         bias="none",
+        task_type=TaskType.CAUSAL_LM,
     )
+    model = get_peft_model(base_model, lora_config)
+    model.print_trainable_parameters()
 
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model.base_model, token=hf_token)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
