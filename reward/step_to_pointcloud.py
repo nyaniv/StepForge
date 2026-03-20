@@ -64,7 +64,7 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
 
         reader = STEPControl_Reader()
         status = reader.ReadFile(tmp_path)
-        if status != 1:  # 1 = IFSelect_RetDone
+        if int(status) != 1:  # 1 = IFSelect_RetDone
             return None
 
         reader.TransferRoots()
