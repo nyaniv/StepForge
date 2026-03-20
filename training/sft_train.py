@@ -48,7 +48,7 @@ import torch
 from datasets import Dataset
 from loguru import logger
 from omegaconf import OmegaConf
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, PeftModel, TaskType, get_peft_model
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -183,16 +183,24 @@ def main():
     base_model.config.use_cache = False
     base_model.enable_input_require_grads()  # required for gradient checkpointing with PEFT
 
-    lora_config = LoraConfig(
-        r=cfg.model.lora_r,
-        lora_alpha=cfg.model.lora_alpha,
-        target_modules=["q_proj", "v_proj", "k_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
-        lora_dropout=cfg.model.lora_dropout,
-        bias="none",
-        task_type=TaskType.CAUSAL_LM,
-    )
-    model = get_peft_model(base_model, lora_config)
+    # Load from existing final checkpoint if available (continued training),
+    # otherwise create a new LoRA adapter from scratch.
+    final_path = os.path.join(cfg.paths.sft_checkpoint_dir, "final")
+    if os.path.exists(final_path):
+        logger.info(f"Loading existing SFT adapter from {final_path} for continued training...")
+        model = PeftModel.from_pretrained(base_model, final_path, is_trainable=True)
+    else:
+        logger.info("No existing SFT checkpoint — creating new LoRA adapter from base model...")
+        lora_config = LoraConfig(
+            r=cfg.model.lora_r,
+            lora_alpha=cfg.model.lora_alpha,
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj",
+                            "gate_proj", "up_proj", "down_proj"],
+            lora_dropout=cfg.model.lora_dropout,
+            bias="none",
+            task_type=TaskType.CAUSAL_LM,
+        )
+        model = get_peft_model(base_model, lora_config)
     model.print_trainable_parameters()
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.base_model, token=hf_token)
