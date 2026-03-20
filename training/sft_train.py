@@ -236,6 +236,7 @@ def main():
         warmup_ratio=cfg.sft.warmup_ratio,
         optim=cfg.sft.optim,
         bf16=True,
+        gradient_checkpointing=True,
         save_strategy="steps",
         save_steps=200,
         save_total_limit=3,
