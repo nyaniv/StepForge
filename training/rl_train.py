@@ -224,7 +224,7 @@ def main():
     kl_kwarg = "beta" if "beta" in grpo_params else "kl_coef"
     optional_kwargs = {}
     if "entropy_coef" in grpo_params:
-        optional_kwargs["entropy_coef"] = cfg.rl.entropy_coef
+        optional_kwargs["entropy_coef"] = 0.05  # override cfg (0.005) — prevent entropy collapse
 
     grpo_config = GRPOConfig(
         output_dir=cfg.paths.rl_checkpoint_dir,
