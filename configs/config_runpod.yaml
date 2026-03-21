@@ -52,7 +52,7 @@ rl:
   learning_rate: 3.0e-6             # paper
   per_device_train_batch_size: 1    # reduced from 2 to fit 80GB with 4 generations
   gradient_accumulation_steps: 8    # 8 to keep effective batch=8 (1×8)
-  max_steps: 160                    # paper says increase to 160 on single GPU
+  max_steps: 40                     # budget run: 40 steps to validate reward signal
   reward:
     delta_low: 0.01                 # paper
     delta_high: 0.5                 # paper
