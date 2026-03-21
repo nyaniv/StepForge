@@ -205,7 +205,7 @@ def main():
     # ── Build RL dataset ─────────────────────────────────────────────────────
     train_jsonl = os.path.join(cfg.paths.processed_dir, "train.jsonl")
     rl_dataset = build_rl_dataset(
-        train_jsonl, retriever, tokenizer, max_completion_length=2048
+        train_jsonl, retriever, tokenizer, max_completion_length=4096
     )
     rl_dataset = rl_dataset.shuffle(seed=42)
 
