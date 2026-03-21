@@ -71,10 +71,33 @@ def r_geo(scd: float,
 
 # ── Subprocess worker (isolates Open3D segfaults) ─────────────────────────────
 
-def _scd_worker(queue: mp.Queue, pred_pc: np.ndarray, gt_pc: np.ndarray,
-                delta_low: float, delta_high: float) -> None:
-    """Run SCD in a child process so a segfault cannot kill the trainer."""
+def _scd_worker(queue: mp.Queue, generated_step: str, gt_step: str,
+                n_points: int, delta_low: float, delta_high: float,
+                text2cad_src: str | None) -> None:
+    """
+    Run the full reward pipeline (STEP parsing + alignment + Chamfer) in a
+    child process so any C++ segfault (OCP tessellation or Open3D) cannot
+    kill the training process.
+    """
     try:
+        if "END-ISO-10303-21;" not in generated_step:
+            queue.put(0.0)
+            return
+
+        pred_pc = step_to_pointcloud(generated_step, n_points=n_points,
+                                     text2cad_src=text2cad_src)
+        gt_pc   = step_to_pointcloud(gt_step, n_points=n_points,
+                                     text2cad_src=text2cad_src)
+
+        if pred_pc is None or gt_pc is None:
+            queue.put(0.0)
+            return
+
+        if (len(np.unique(pred_pc, axis=0)) < _MIN_UNIQUE_POINTS or
+                len(np.unique(gt_pc, axis=0)) < _MIN_UNIQUE_POINTS):
+            queue.put(0.0)
+            return
+
         scd = scaled_chamfer_distance(pred_pc, gt_pc)
         reward = r_geo(scd, delta_low=delta_low, delta_high=delta_high) if np.isfinite(scd) else 0.0
     except Exception:
@@ -95,32 +118,19 @@ def compute_reward(
     """
     Full reward pipeline.  Returns 0.0 for any failure — never raises.
 
-    Fast-path: if the generated STEP doesn't have the terminator, skip OCC entirely.
-    Open3D alignment runs in a subprocess to isolate segfaults from degenerate
-    point clouds so a crash cannot kill the training process.
+    Everything (STEP parsing, tessellation, alignment, Chamfer) runs in a
+    subprocess so any C++ segfault cannot kill the training process.
     """
+    # Fast-path: skip subprocess overhead if terminator is absent
     if "END-ISO-10303-21;" not in generated_step:
         return 0.0
 
-    pred_pc = step_to_pointcloud(generated_step, n_points=n_points,
-                                 text2cad_src=text2cad_src)
-    gt_pc   = step_to_pointcloud(gt_step, n_points=n_points,
-                                 text2cad_src=text2cad_src)
-
-    if pred_pc is None or gt_pc is None:
-        return 0.0
-
-    # Reject degenerate clouds — Open3D RANSAC/ICP segfaults when unique
-    # points are too few (e.g. when step_to_pointcloud had to sample with
-    # heavy replacement from a near-empty mesh).
-    if (len(np.unique(pred_pc, axis=0)) < _MIN_UNIQUE_POINTS or
-            len(np.unique(gt_pc, axis=0)) < _MIN_UNIQUE_POINTS):
-        return 0.0
-
-    # Run alignment + Chamfer in a subprocess to survive any C++ segfault.
     queue: mp.Queue = mp.Queue()
-    proc = mp.Process(target=_scd_worker,
-                      args=(queue, pred_pc, gt_pc, delta_low, delta_high))
+    proc = mp.Process(
+        target=_scd_worker,
+        args=(queue, generated_step, gt_step, n_points, delta_low, delta_high,
+              text2cad_src),
+    )
     proc.start()
     proc.join(timeout=60)  # 60 s hard cap per reward call
 
