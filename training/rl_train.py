@@ -224,14 +224,14 @@ def main():
     kl_kwarg = "beta" if "beta" in grpo_params else "kl_coef"
     optional_kwargs = {}
     if "entropy_coef" in grpo_params:
-        optional_kwargs["entropy_coef"] = 0.05  # override cfg (0.005) — prevent entropy collapse
+        optional_kwargs["entropy_coef"] = cfg.rl.entropy_coef
 
     grpo_config = GRPOConfig(
         output_dir=cfg.paths.rl_checkpoint_dir,
         num_generations=cfg.rl.num_generations,
         **{kl_kwarg: cfg.rl.kl_coef},
         **optional_kwargs,
-        learning_rate=1e-5,  # override cfg (3e-6) — need clip_ratio > 0 within 40 steps
+        learning_rate=cfg.rl.learning_rate,
         per_device_train_batch_size=cfg.rl.per_device_train_batch_size,
         gradient_accumulation_steps=cfg.rl.gradient_accumulation_steps,
         max_steps=cfg.rl.max_steps,
