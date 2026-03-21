@@ -69,6 +69,36 @@ def r_geo(scd: float,
     return (delta_high - scd) / (delta_high - delta_low)
 
 
+# ── Parse reward (intermediate signal: does OCP accept the generated STEP?) ────
+
+def _parse_worker(queue: mp.Queue, generated_step: str,
+                  text2cad_src: str | None) -> None:
+    """Return 1 if step_to_pointcloud succeeds, else 0."""
+    try:
+        pc = step_to_pointcloud(generated_step, n_points=64,
+                                text2cad_src=text2cad_src)
+        queue.put(1 if pc is not None and len(np.unique(pc, axis=0)) >= _MIN_UNIQUE_POINTS else 0)
+    except Exception:
+        queue.put(0)
+
+
+def compute_parse_reward(generated_step: str, text2cad_src: str | None = None,
+                         reward_value: float = 0.3) -> float:
+    """
+    Returns reward_value if the generated STEP parses successfully in OCP,
+    0.0 otherwise.  Runs in a subprocess to isolate segfaults.
+    """
+    if "END-ISO-10303-21;" not in generated_step:
+        return 0.0
+    queue: mp.Queue = mp.Queue()
+    proc = mp.Process(target=_parse_worker, args=(queue, generated_step, text2cad_src))
+    proc.start()
+    proc.join(timeout=30)
+    if proc.exitcode != 0 or queue.empty():
+        return 0.0
+    return reward_value if queue.get() == 1 else 0.0
+
+
 # ── Subprocess worker (isolates Open3D segfaults) ─────────────────────────────
 
 def _scd_worker(queue: mp.Queue, generated_step: str, gt_step: str,

@@ -48,7 +48,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from trl import GRPOConfig, GRPOTrainer
 
 from retrieval.retriever import Retriever
-from reward.scd_reward import compute_reward
+from reward.scd_reward import compute_reward, compute_parse_reward
 
 
 # ── Prompt format (identical to SFT) ──────────────────────────────────────────
@@ -101,6 +101,20 @@ def make_reward_fn(text2cad_src: str, delta_low: float, delta_high: float,
         ]
 
     return reward_fn
+
+
+# ── Parse reward (OCP parse success) ──────────────────────────────────────────
+
+def make_parse_reward_fn(text2cad_src: str):
+    """Return a GRPO-compatible parse reward function."""
+
+    def parse_reward_fn(completions: list[str], **kwargs) -> list[float]:
+        return [
+            compute_parse_reward(gen, text2cad_src=text2cad_src)
+            for gen in completions
+        ]
+
+    return parse_reward_fn
 
 
 # ── Build RL dataset with live RAG ────────────────────────────────────────────
@@ -209,7 +223,8 @@ def main():
     )
     rl_dataset = rl_dataset.shuffle(seed=42)
 
-    # ── Reward function ──────────────────────────────────────────────────────
+    # ── Reward functions ─────────────────────────────────────────────────────
+    parse_reward_fn = make_parse_reward_fn(text2cad_src=cfg.paths.text2cad_src)
     reward_fn = make_reward_fn(
         text2cad_src=cfg.paths.text2cad_src,
         delta_low=cfg.rl.reward.delta_low,
@@ -249,7 +264,7 @@ def main():
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
-        reward_funcs=[format_reward_fn, reward_fn],
+        reward_funcs=[format_reward_fn, parse_reward_fn, reward_fn],
         args=grpo_config,
         train_dataset=rl_dataset,
     )
