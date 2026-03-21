@@ -237,7 +237,7 @@ def main():
         max_steps=cfg.rl.max_steps,
         max_completion_length=4096,   # covers 40.9% of examples; sdpa fits 80GB
         bf16=True,
-        logging_steps=5,
+        logging_steps=1,
         save_steps=20,
         report_to="none",
     )
