@@ -22,6 +22,11 @@ pip install --ignore-installed \
     scipy bitsandbytes \
     datasets pandas loguru omegaconf tqdm
 
+echo "=== Re-pinning PyTorch 2.6.0 (other packages may have upgraded it) ==="
+pip install --ignore-installed \
+    "torch==2.6.0" "torchvision==0.21.0" \
+    --index-url https://download.pytorch.org/whl/cu124
+
 echo "=== Verifying OCP ==="
 python -c "from OCP.STEPControl import STEPControl_Reader; print('OCP ok')"
 
