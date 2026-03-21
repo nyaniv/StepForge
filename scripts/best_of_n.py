@@ -191,6 +191,7 @@ def main():
 
             prompt = format_prompt(record["caption"], retrieved_step)
 
+            logger.info(f"[{i+1}/{len(filtered)}] Generating {args.n} completions for uid={uid}...")
             completions = generate_completions(
                 prompt, model, tokenizer,
                 n=args.n,
