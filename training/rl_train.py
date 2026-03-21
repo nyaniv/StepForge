@@ -125,7 +125,14 @@ def build_rl_dataset(train_jsonl: str, retriever: Retriever,
             skipped += 1
             continue
         retrieved = retriever.retrieve(record["caption"], exclude_uid=record["uid"])
-        prompt = format_prompt(record["caption"], retrieved["step"])
+        # Truncate retrieved STEP to 200 tokens — same as SFT — so the model
+        # cannot copy the context and must generate original geometry.
+        retrieved_ids = tokenizer(retrieved["step"], add_special_tokens=False)["input_ids"]
+        if len(retrieved_ids) > 200:
+            retrieved_step = tokenizer.decode(retrieved_ids[:200], skip_special_tokens=True)
+        else:
+            retrieved_step = retrieved["step"]
+        prompt = format_prompt(record["caption"], retrieved_step)
         data.append({
             "prompt": prompt,
             "ground_truth_step": record["step"],

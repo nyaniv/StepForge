@@ -61,7 +61,7 @@ from transformers import (
 
 # Truncate retrieved STEP to this many tokens to leave room for GT STEP + EOS.
 # With max_seq_length=8192: prompt ≈ 1100 tokens, leaving ~7090 tokens for GT.
-MAX_RETRIEVED_TOKENS = 1000
+MAX_RETRIEVED_TOKENS = 200
 
 # ── Prompt helpers ─────────────────────────────────────────────────────────────
 
