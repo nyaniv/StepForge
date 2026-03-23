@@ -4,6 +4,7 @@ checkpoints/
 # Training data and generated artifacts (large)
 data/processed/
 data/step_files/
+data/dfs_step/
 data/captions.csv
 data/*.pth
 data/*.zip
