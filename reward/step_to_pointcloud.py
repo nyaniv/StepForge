@@ -17,7 +17,8 @@ import numpy as np
 
 
 def step_to_pointcloud(step_content: str, n_points: int = 2048,
-                       text2cad_src: str | None = None) -> np.ndarray | None:
+                       text2cad_src: str | None = None,
+                       verbose: bool = False) -> np.ndarray | None:
     """
     Convert STEP text → sampled 3D point cloud.
 
@@ -25,6 +26,7 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
         step_content: complete STEP file as a string
         n_points: number of points to sample from the mesh
         text2cad_src: optional path to Text2CAD/CadSeqProc (for OCC import fallback)
+        verbose: if True, print reason for failure instead of silently returning None
 
     Returns:
         (n_points, 3) float32 array, or None if STEP is invalid/unrenderable.
@@ -68,19 +70,25 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
         reader = STEPControl_Reader()
         status = reader.ReadFile(tmp_path)
         if int(status) != 1:  # 1 = IFSelect_RetDone
+            if verbose:
+                print(f"[step_to_pointcloud] ReadFile failed: status={int(status)}")
             return None
 
         reader.TransferRoots()
         shape = reader.OneShape()
         if shape.IsNull():
+            if verbose:
+                print("[step_to_pointcloud] OneShape returned null shape")
             return None
 
         # Tessellate with deflection 0.01
         BRepMesh_IncrementalMesh(shape, 0.01).Perform()
 
         all_pts = []
+        n_faces = 0
         explorer = TopExp_Explorer(shape, TopAbs_FACE)
         while explorer.More():
+            n_faces += 1
             face = topods_Face(explorer.Current())
             tri = (BRep_Tool.Triangulation_s(face, face.Location())
                if hasattr(BRep_Tool, "Triangulation_s")
@@ -92,14 +100,21 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
             explorer.Next()
 
         if not all_pts:
+            if verbose:
+                print(f"[step_to_pointcloud] No points after tessellation (faces={n_faces})")
             return None
 
         pts = np.array(all_pts, dtype=np.float32)
+        unique_pts = len(np.unique(pts, axis=0))
+        if verbose:
+            print(f"[step_to_pointcloud] OK: faces={n_faces}, raw_pts={len(pts)}, unique_pts={unique_pts}")
         # Sample with replacement if fewer mesh points than requested
         idx = np.random.choice(len(pts), size=n_points, replace=(len(pts) < n_points))
         return pts[idx]
 
-    except Exception:
+    except Exception as e:
+        if verbose:
+            print(f"[step_to_pointcloud] Exception: {e!r}")
         return None
     finally:
         if os.path.exists(tmp_path):

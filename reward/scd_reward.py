@@ -27,7 +27,7 @@ from reward.step_to_pointcloud import step_to_pointcloud
 # Minimum unique points required before running Open3D registration.
 # Below this threshold the cloud is degenerate (sampled with replacement
 # from very few mesh vertices) and RANSAC/ICP will segfault.
-_MIN_UNIQUE_POINTS = 50
+_MIN_UNIQUE_POINTS = 10
 
 
 # ── Eq. 1: Bidirectional Chamfer Distance ─────────────────────────────────────
@@ -103,7 +103,7 @@ def compute_parse_reward(generated_step: str, text2cad_src: str | None = None,
 
 def _scd_worker(queue: mp.Queue, generated_step: str, gt_step: str,
                 n_points: int, delta_low: float, delta_high: float,
-                text2cad_src: str | None) -> None:
+                text2cad_src: str | None, verbose: bool = False) -> None:
     """
     Run the full reward pipeline (STEP parsing + alignment + Chamfer) in a
     child process so any C++ segfault (OCP tessellation or Open3D) cannot
@@ -111,26 +111,49 @@ def _scd_worker(queue: mp.Queue, generated_step: str, gt_step: str,
     """
     try:
         if "END-ISO-10303-21;" not in generated_step:
+            if verbose:
+                print("[scd_worker] FAIL: no terminator")
             queue.put(0.0)
             return
 
         pred_pc = step_to_pointcloud(generated_step, n_points=n_points,
-                                     text2cad_src=text2cad_src)
+                                     text2cad_src=text2cad_src, verbose=verbose)
         gt_pc   = step_to_pointcloud(gt_step, n_points=n_points,
-                                     text2cad_src=text2cad_src)
+                                     text2cad_src=text2cad_src, verbose=verbose)
 
-        if pred_pc is None or gt_pc is None:
+        if pred_pc is None:
+            if verbose:
+                print("[scd_worker] FAIL: pred_pc is None (generated STEP failed to parse)")
+            queue.put(0.0)
+            return
+        if gt_pc is None:
+            if verbose:
+                print("[scd_worker] FAIL: gt_pc is None (GT STEP failed to parse)")
             queue.put(0.0)
             return
 
-        if (len(np.unique(pred_pc, axis=0)) < _MIN_UNIQUE_POINTS or
-                len(np.unique(gt_pc, axis=0)) < _MIN_UNIQUE_POINTS):
+        pred_unique = len(np.unique(pred_pc, axis=0))
+        gt_unique   = len(np.unique(gt_pc, axis=0))
+        if pred_unique < _MIN_UNIQUE_POINTS:
+            if verbose:
+                print(f"[scd_worker] FAIL: pred unique_pts={pred_unique} < {_MIN_UNIQUE_POINTS}")
+            queue.put(0.0)
+            return
+        if gt_unique < _MIN_UNIQUE_POINTS:
+            if verbose:
+                print(f"[scd_worker] FAIL: gt unique_pts={gt_unique} < {_MIN_UNIQUE_POINTS}")
             queue.put(0.0)
             return
 
         scd = scaled_chamfer_distance(pred_pc, gt_pc)
+        if verbose:
+            print(f"[scd_worker] SCD={scd:.4f}, finite={np.isfinite(scd)}")
         reward = r_geo(scd, delta_low=delta_low, delta_high=delta_high) if np.isfinite(scd) else 0.0
-    except Exception:
+        if verbose:
+            print(f"[scd_worker] reward={reward:.4f}")
+    except Exception as e:
+        if verbose:
+            print(f"[scd_worker] Exception: {e!r}")
         reward = 0.0
     queue.put(reward)
 
@@ -144,6 +167,7 @@ def compute_reward(
     delta_low: float = 0.01,
     delta_high: float = 0.50,
     text2cad_src: str | None = None,
+    verbose: bool = False,
 ) -> float:
     """
     Full reward pipeline.  Returns 0.0 for any failure — never raises.
@@ -159,12 +183,14 @@ def compute_reward(
     proc = mp.Process(
         target=_scd_worker,
         args=(queue, generated_step, gt_step, n_points, delta_low, delta_high,
-              text2cad_src),
+              text2cad_src, verbose),
     )
     proc.start()
     proc.join(timeout=60)  # 60 s hard cap per reward call
 
     if proc.exitcode != 0 or queue.empty():
+        if verbose:
+            print(f"[compute_reward] subprocess failed: exitcode={proc.exitcode}, empty={queue.empty()}")
         return 0.0
 
     return queue.get()
