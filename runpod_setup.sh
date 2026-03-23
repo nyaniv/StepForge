@@ -122,6 +122,7 @@ pip install --quiet --no-cache-dir --root-user-action=ignore "unsloth" --upgrade
 echo "==> Creating output directories..."
 mkdir -p "$VOLUME/data" \
          "$VOLUME/processed/step_files" \
+         "$VOLUME/processed/dfs_step" \
          "$VOLUME/retrieval" \
          "$VOLUME/checkpoints/sft" \
          "$VOLUME/checkpoints/rl" \
@@ -207,11 +208,17 @@ echo ""
 echo "  conda activate stepforge"
 echo "  cd $REPO"
 echo ""
-echo "  # Full pipeline (data prep — only needed once; persists on network volume)"
-echo "  python data/build_dataset.py    --config configs/config_runpod.yaml"
-echo "  python retrieval/build_index.py --config configs/config_runpod.yaml"
-echo "  python data/precompute_rag.py   --config configs/config_runpod.yaml"
+echo "  # Step 1 — DFS-restructure raw STEP files (~2h, skips already-done files)"
+echo "  python data/batch_restructure.py    --config configs/config_runpod.yaml"
 echo ""
-echo "  # Training"
-echo "  python training/sft_train.py --config configs/config_runpod.yaml"
+echo "  # Step 2 — Build RAG dataset (pairs each STEP with nearest-neighbour retrieval)"
+echo "  python data/dataset_construct_rag.py --config configs/config_runpod.yaml"
+echo ""
+echo "  # Step 3 — Split into train / val / test"
+echo "  python data/data_split.py           --config configs/config_runpod.yaml"
+echo ""
+echo "  # Step 4 — SFT training (~40 epochs on A100)"
+echo "  python training/llama3_SFT_response.py"
+echo ""
+echo "  # Step 5 — RL training (cold-starts from SFT checkpoint)"
 echo "  python training/rl_train.py  --config configs/config_runpod.yaml"
