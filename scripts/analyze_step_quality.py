@@ -111,10 +111,15 @@ def analyze_step(step_str: str) -> dict:
             defined_set.add(eid)
             entity_refs[eid] = refs
             entity_types[etype] += 1
-        elif complex_pattern.match(entity_line):
-            # Complex STEP entity: #N = (TYPE1() TYPE2()...);
-            # Parser silently skips these — their IDs stay referenced but undefined
-            dropped_complex += 1
+        else:
+            cm = complex_pattern.match(entity_line)
+            if cm:
+                # Complex STEP entity: #N = (TYPE1() TYPE2()...);
+                # The ID IS defined in the file — add to defined_set so references
+                # to it are not counted as dangling. Track count separately.
+                eid = int(cm.group(1))
+                defined_set.add(eid)
+                dropped_complex += 1
 
     entity_count  = len(defined_set)
     dangling_refs = sum(
@@ -269,13 +274,13 @@ def print_report(gt_stats: dict, sft_stats: dict | None):
 
     if gt_d > 5.0:
         print(f"  ✗ GT data has dangling refs in {gt_d:.1f}% of files")
-        print(f"    Dropped complex entities in {gt_c:.1f}% of files")
-        print(f"    → Root cause: complex STEP entity instances (e.g. LENGTH_UNIT, SI_UNIT)")
-        print(f"      are silently dropped by the parser. Their IDs remain referenced in args.")
-        print(f"      This is a data pipeline bug, not a model problem.")
-        print(f"      Impact: these are unit/tolerance entities — OCC may still render the geometry.")
+        print(f"    Complex entities present in {gt_c:.1f}% of files")
+        print(f"    → Dangling refs despite complex entity IDs being added to defined_set.")
+        print(f"      This is a real data pipeline bug — check step_restructurer.py.")
     else:
         print(f"  ✓ GT data is structurally clean (dangling: {gt_d:.1f}%)")
+        if gt_c > 0:
+            print(f"    Complex entities present in {gt_c:.1f}% of files (normal — unit/context entities)")
 
     if sft_stats:
         sft_d = sft_stats["files_with_dangling_pct"]
