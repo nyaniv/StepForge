@@ -43,7 +43,12 @@ USE_RAG         = True
 from unsloth import FastLanguageModel
 import torch
 
-max_seq_length = 16384  # RoPE Scaling is handled automatically by Unsloth
+max_seq_length = 8192   # RoPE Scaling is handled automatically by Unsloth
+# Max lines to keep from the retrieved STEP file. The full retrieved STEP +
+# target STEP together exceed 16k tokens, causing train_on_responses_only to
+# mask everything. 150 lines keeps the RAG context meaningful while leaving
+# room for the target output within the context window.
+MAX_RETRIEVED_LINES = 150
 dtype = None            # None = auto-detect (bfloat16 on Ampere+, float16 on older GPUs)
 load_in_4bit = False    # Set True to use 4-bit quantisation (reduces VRAM, slight quality loss)
 
@@ -106,7 +111,10 @@ def formatting_prompts_func(examples):
     if USE_RAG:
         inputs = examples["relavant_step_file"]
         for instruction, input_, output in zip(instructions, inputs, outputs):
-            text = ABC_PROMPT_RAG.format(instruction, input_, output) + EOS_TOKEN
+            # Truncate retrieved STEP to MAX_RETRIEVED_LINES to keep sequences
+            # within max_seq_length after adding the target output.
+            truncated = "\n".join(input_.splitlines()[:MAX_RETRIEVED_LINES])
+            text = ABC_PROMPT_RAG.format(instruction, truncated, output) + EOS_TOKEN
             texts.append(text)
     else:
         for instruction, output in zip(instructions, outputs):
