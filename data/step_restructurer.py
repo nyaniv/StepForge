@@ -77,8 +77,22 @@ class StepRestructurer:
 
         data_section = data_match.group(1)
 
-        # Parse entities - collect all entity lines first
-        all_entity_lines = re.findall(r'#\d+\s*=\s*[^;]+;', data_section, re.MULTILINE)
+        # Parse entities — accumulate multi-line entities line by line.
+        # Lines that don't start with '#' are continuations of the previous entity.
+        all_entity_lines = []
+        pending = ""
+        for raw_line in data_section.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if pending:
+                pending = pending + " " + line
+            else:
+                pending = line
+            if not pending.endswith(";"):
+                continue
+            all_entity_lines.append(pending)
+            pending = ""
 
         print(f"Found {len(all_entity_lines)} total entity lines in STEP file")
 
@@ -87,7 +101,7 @@ class StepRestructurer:
             # Check if it's a complex entity (starts with parentheses)
             if re.search(r'#\d+\s*=\s*\(', line):
                 # Parse complex entity
-                complex_match = re.search(r'#(\d+)\s*=\s*(.+);', line, re.DOTALL)
+                complex_match = re.search(r'#(\d+)\s*=\s*\((.+)\)\s*;$', line)
                 if complex_match:
                     entity_id = int(complex_match.group(1))
                     self.complex_entities[entity_id] = line.strip()
