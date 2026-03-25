@@ -47,6 +47,8 @@ def format_prompt(caption: str, retrieved_step: str, tokenizer) -> str:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/config_runpod.yaml")
+    parser.add_argument("--checkpoint", default=None,
+                        help="Override checkpoint path (default: sft_checkpoint_dir/final)")
     parser.add_argument("--n-samples", type=int, default=5)
     parser.add_argument("--max-new-tokens", type=int, default=512)
     args = parser.parse_args()
@@ -54,7 +56,7 @@ def main():
     cfg = OmegaConf.load(args.config)
     hf_token = os.environ.get("HUGGINGFACE_TOKEN")
 
-    sft_checkpoint = os.path.join(cfg.paths.sft_checkpoint_dir, "final")
+    sft_checkpoint = args.checkpoint or os.path.join(cfg.paths.sft_checkpoint_dir, "final")
     logger.info(f"Loading SFT checkpoint from {sft_checkpoint}")
 
     bnb_config = BitsAndBytesConfig(
