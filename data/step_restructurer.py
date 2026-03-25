@@ -87,7 +87,7 @@ class StepRestructurer:
             # Check if it's a complex entity (starts with parentheses)
             if re.search(r'#\d+\s*=\s*\(', line):
                 # Parse complex entity
-                complex_match = re.search(r'#(\d+)\s*=\s*(.+);', line)
+                complex_match = re.search(r'#(\d+)\s*=\s*(.+);', line, re.DOTALL)
                 if complex_match:
                     entity_id = int(complex_match.group(1))
                     self.complex_entities[entity_id] = line.strip()
