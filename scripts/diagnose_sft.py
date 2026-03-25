@@ -28,20 +28,20 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 
-SYSTEM_MSG = (
-    "Given the object description and relevant CAD data, "
-    "generate the corresponding STEP file."
+ABC_PROMPT_RAG = (
+    "You are a CAD model generation assistant trained to produce STEP (.step) files "
+    "based on textual descriptions. Given the following object description and relevant "
+    "retrieved CAD data, generate a STEP file that accurately represents the described object."
+    "\n\n\n### caption:\n{}\n\n### retrieved relevant step file:\n{}\n\n### output:\n"
 )
 
+MAX_RETRIEVED_TOKENS = 500  # must match training/llama3_SFT_response.py
 
-def format_prompt(caption: str, retrieved_step: str) -> str:
-    return (
-        f"<|system|>\n{SYSTEM_MSG}\n"
-        f"<|user|>\n"
-        f"caption: {caption}\n"
-        f"retrieved step file:\n{retrieved_step}\n"
-        f"<|assistant|>\n"
-    )
+
+def format_prompt(caption: str, retrieved_step: str, tokenizer) -> str:
+    ids = tokenizer(retrieved_step, add_special_tokens=False)["input_ids"]
+    truncated = tokenizer.decode(ids[:MAX_RETRIEVED_TOKENS])
+    return ABC_PROMPT_RAG.format(caption, truncated)
 
 
 def main():
@@ -77,9 +77,9 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
-    # Load samples from pre-computed RAG file (already on volume)
-    train_rag = os.path.join(cfg.paths.processed_dir, "train_with_rag.jsonl")
-    with open(train_rag) as f:
+    # Load samples from train.jsonl
+    train_jsonl = os.path.join(cfg.paths.processed_dir, "train.jsonl")
+    with open(train_jsonl) as f:
         records = [json.loads(l) for l in f]
 
     samples = records[:args.n_samples]
@@ -88,19 +88,21 @@ def main():
                 f"(max_new_tokens={args.max_new_tokens})\n")
 
     for i, rec in enumerate(samples):
-        prompt = format_prompt(rec["caption"], rec["retrieved_step"])
+        retrieved = rec.get("relavant_step_file", rec.get("retrieved_step", ""))
+        gt_step   = rec.get("output", rec.get("step", ""))
+        prompt = format_prompt(rec["caption"], retrieved, tokenizer)
         prompt_ids = tokenizer(
             prompt, return_tensors="pt", add_special_tokens=False
         ).input_ids.to(model.device)
 
-        gt_ids = tokenizer(rec["step"], add_special_tokens=False).input_ids
+        gt_ids = tokenizer(gt_step, add_special_tokens=False).input_ids
 
         print(f"\n{'='*70}")
-        print(f"SAMPLE {i+1}  uid={rec['uid']}")
+        print(f"SAMPLE {i+1}  uid={rec.get('id_original', rec.get('uid', i))}")
         print(f"Caption: {rec['caption'][:100]}")
         print(f"Prompt tokens    : {prompt_ids.shape[1]}")
         print(f"GT STEP tokens   : {len(gt_ids)}")
-        print(f"GT has terminator: {'END-ISO-10303-21;' in rec['step']}")
+        print(f"GT has terminator: {'END-ISO-10303-21;' in gt_step}")
 
         with torch.no_grad():
             output_ids = model.generate(
@@ -114,7 +116,7 @@ def main():
         raw = tokenizer.decode(completion_ids, skip_special_tokens=False)
         clean = tokenizer.decode(completion_ids, skip_special_tokens=True)
 
-        hit_eos       = tokenizer.eos_token in raw
+        hit_eos        = tokenizer.eos_token in raw
         hit_terminator = "END-ISO-10303-21;" in raw
 
         print(f"Generated tokens : {len(completion_ids)}")
