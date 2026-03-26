@@ -30,26 +30,32 @@ from loguru import logger
 from omegaconf import OmegaConf
 
 
-# ── Prompt helpers (identical to training) ────────────────────────────────────
+# ── Prompt helpers (identical to SFT training) ────────────────────────────────
 
-SYSTEM_MSG = (
-    "Given the object description and relevant CAD data, "
-    "generate the corresponding STEP file."
+MAX_RETRIEVED_TOKENS = 500  # must match training/llama3_SFT_response.py
+
+ABC_PROMPT_RAG = (
+    "You are a CAD model generation assistant trained to produce STEP (.step) files "
+    "based on textual descriptions. Given the following object description and relevant "
+    "retrieved CAD data, generate a STEP file that accurately represents the described object."
+    "\n\n\n### caption:\n{}\n\n### retrieved relevant step file:\n{}\n\n### output:\n"
 )
 
 
-def format_prompt(caption: str, retrieved_step: str) -> str:
-    return (
-        f"<|system|>\n{SYSTEM_MSG}\n"
-        f"<|user|>\n"
-        f"caption: {caption}\n"
-        f"retrieved step file:\n{retrieved_step}\n"
-        f"<|assistant|>\n"
-    )
+def format_prompt(caption: str, retrieved_step: str, tokenizer=None) -> str:
+    if tokenizer is not None:
+        ids = tokenizer(retrieved_step, add_special_tokens=False)["input_ids"]
+        retrieved_step = tokenizer.decode(ids[:MAX_RETRIEVED_TOKENS])
+    return ABC_PROMPT_RAG.format(caption, retrieved_step)
 
 
 def extract_step(text: str) -> str:
-    """Extract STEP content between ISO-10303-21; and END-ISO-10303-21;"""
+    """Extract DATA section from generated output (DATA; ... END-ISO-10303-21;)."""
+    # Model outputs DATA-section-only (new pipeline format)
+    m = re.search(r"(DATA;.*?END-ISO-10303-21;)", text, re.DOTALL)
+    if m:
+        return m.group(1)
+    # Full STEP with header (backward compat / old format)
     m = re.search(r"(ISO-10303-21;.*?END-ISO-10303-21;)", text, re.DOTALL)
     return m.group(1) if m else text
 
@@ -70,7 +76,8 @@ def generate_step(
     Returns the extracted STEP content string.
     """
     retrieved = retriever.retrieve(caption)  # live retrieval at inference
-    prompt = format_prompt(caption, retrieved["step"])
+    retrieved_step = retrieved.get("output") or retrieved.get("step") or ""
+    prompt = format_prompt(caption, retrieved_step, tokenizer)
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     output_ids = model.generate(

@@ -109,9 +109,10 @@ def main():
     cfg = OmegaConf.load(args.config)
 
     # Load test set
-    test_jsonl = os.path.join(cfg.paths.processed_dir, "test.jsonl")
-    logger.info(f"Loading test data from {test_jsonl}")
-    test_records = [json.loads(l) for l in open(test_jsonl)]
+    test_json = os.path.join(cfg.paths.processed_dir, "test.json")
+    logger.info(f"Loading test data from {test_json}")
+    with open(test_json) as f:
+        test_records = json.load(f)
     if args.max_examples:
         test_records = test_records[:args.max_examples]
         logger.info(f"Evaluating on {len(test_records)} examples (--max-examples)")
@@ -153,7 +154,7 @@ def main():
             temperature=args.temperature,
         )
         generated.append(step_out)
-        gt_steps.append(record["step"])
+        gt_steps.append(record.get("output") or record.get("step", ""))
 
     # Compute metrics
     logger.info("Computing metrics...")
