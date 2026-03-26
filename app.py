@@ -49,6 +49,25 @@ retriever = Retriever(
 logger.info("Ready.")
 
 
+# ── STEP header helper ────────────────────────────────────────────────────
+
+_MINIMAL_STEP_HEADER = (
+    "ISO-10303-21;\n"
+    "HEADER;\n"
+    "FILE_DESCRIPTION(('StepForge generated'),'2;1');\n"
+    "FILE_NAME('','',(''),(''),'','','');\n"
+    "FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));\n"
+    "ENDSEC;\n"
+)
+
+
+def ensure_full_step(step_content: str) -> str:
+    """Prepend a valid STEP header to DATA-section-only content."""
+    if step_content.lstrip().startswith("DATA;"):
+        return _MINIMAL_STEP_HEADER + step_content.lstrip()
+    return step_content
+
+
 # ── STEP → STL conversion (for 3D preview) ────────────────────────────────
 
 def step_to_stl(step_content: str, stl_path: str) -> bool:
@@ -65,7 +84,7 @@ def step_to_stl(step_content: str, stl_path: str) -> bool:
     step_tmp = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".step", mode="w", delete=False) as f:
-            f.write(step_content)
+            f.write(ensure_full_step(step_content))
             step_tmp = f.name
 
         reader = STEPControl_Reader()
@@ -110,16 +129,16 @@ def generate(caption: str):
                 retriever=retriever,
             )
 
-            if not step_content or "ISO-10303-21;" not in step_content:
+            if not step_content or "END-ISO-10303-21;" not in step_content:
                 last_error = "Model did not produce a valid STEP file."
                 continue
 
-            # Save STEP file for download
+            # Save STEP file for download — prepend header so it opens in CAD tools
             prefix = caption[:20].replace(" ", "_")
             step_file = tempfile.NamedTemporaryFile(
                 suffix=".step", mode="w", delete=False, prefix=prefix + "_"
             )
-            step_file.write(step_content)
+            step_file.write(ensure_full_step(step_content))
             step_file.close()
 
             # Convert to STL for 3D preview

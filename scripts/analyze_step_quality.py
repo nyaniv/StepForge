@@ -343,21 +343,24 @@ def generate_sft_outputs(cfg, checkpoint: str, records: list[dict], n: int) -> l
         model_name=cfg.retrieval.model,
     )
 
-    SYSTEM_MSG = (
-        "Given the object description and relevant CAD data, "
-        "generate the corresponding STEP file."
+    MAX_RETRIEVED_TOKENS = 500  # must match training/llama3_SFT_response.py
+
+    ABC_PROMPT_RAG = (
+        "You are a CAD model generation assistant trained to produce STEP (.step) files "
+        "based on textual descriptions. Given the following object description and relevant "
+        "retrieved CAD data, generate a STEP file that accurately represents the described object."
+        "\n\n\n### caption:\n{}\n\n### retrieved relevant step file:\n{}\n\n### output:\n"
     )
 
     def format_prompt(caption, retrieved_step):
-        return (
-            f"<|system|>\n{SYSTEM_MSG}\n"
-            f"<|user|>\n"
-            f"caption: {caption}\n"
-            f"retrieved step file:\n{retrieved_step}\n"
-            f"<|assistant|>\n"
-        )
+        ids = tokenizer(retrieved_step, add_special_tokens=False)["input_ids"]
+        truncated = tokenizer.decode(ids[:MAX_RETRIEVED_TOKENS])
+        return ABC_PROMPT_RAG.format(caption, truncated)
 
     def extract_step(text):
+        m = re.search(r"(DATA;.*?END-ISO-10303-21;)", text, re.DOTALL)
+        if m:
+            return m.group(1)
         m = re.search(r"(ISO-10303-21;.*?END-ISO-10303-21;)", text, re.DOTALL)
         return m.group(1) if m else text
 
@@ -366,8 +369,10 @@ def generate_sft_outputs(cfg, checkpoint: str, records: list[dict], n: int) -> l
 
     logger.info(f"Generating {len(samples)} SFT outputs...")
     for i, rec in enumerate(samples):
-        retrieved = retriever.retrieve(rec["caption"])
-        prompt    = format_prompt(rec["caption"], retrieved["step"])
+        uid       = rec.get("id_original") or rec.get("uid", str(i))
+        retrieved = retriever.retrieve(rec["caption"], exclude_uid=uid)
+        retrieved_step = retrieved.get("output") or retrieved.get("step") or ""
+        prompt    = format_prompt(rec["caption"], retrieved_step)
 
         inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
 
@@ -384,10 +389,10 @@ def generate_sft_outputs(cfg, checkpoint: str, records: list[dict], n: int) -> l
         step_content   = extract_step(text)
 
         results.append({
-            "uid":     rec.get("uid", str(i)),
+            "uid":     uid,
             "caption": rec["caption"],
             "step":    step_content,
-            "gt_step": rec["step"],
+            "gt_step": rec.get("output") or rec.get("step", ""),
         })
 
         if (i + 1) % 10 == 0:
@@ -418,18 +423,13 @@ def main():
     cfg = OmegaConf.load(args.config)
 
     # ── Load GT data ──────────────────────────────────────────────────────────
-    split_file = os.path.join(cfg.paths.processed_dir, f"{args.split}.jsonl")
-    if not os.path.exists(split_file):
-        # Fall back to train_with_rag if plain train.jsonl not present
-        split_file = os.path.join(cfg.paths.processed_dir, "train_with_rag.jsonl")
-        logger.info(f"Using train_with_rag.jsonl as GT source")
-
+    split_file = os.path.join(cfg.paths.processed_dir, f"{args.split}.json")
     logger.info(f"Loading GT data from {split_file}")
     with open(split_file) as f:
-        gt_records = [json.loads(l) for l in f]
+        gt_records = json.load(f)
 
     gt_records = gt_records[:args.n]
-    gt_stats   = analyze_dataset(gt_records, step_key="step", label="GT")
+    gt_stats   = analyze_dataset(gt_records, step_key="output", label="GT")
 
     # ── Load or generate SFT outputs ─────────────────────────────────────────
     sft_stats = None

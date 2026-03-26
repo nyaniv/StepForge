@@ -79,10 +79,10 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
-    # Load samples from train.jsonl
-    train_jsonl = os.path.join(cfg.paths.processed_dir, "train.jsonl")
-    with open(train_jsonl) as f:
-        records = [json.loads(l) for l in f]
+    # Load samples from train.json
+    train_json = os.path.join(cfg.paths.processed_dir, "train.json")
+    with open(train_json) as f:
+        records = json.load(f)
 
     samples = records[:args.n_samples]
 
