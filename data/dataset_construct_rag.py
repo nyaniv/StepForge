@@ -21,6 +21,7 @@ Usage:
 
 import json
 import os
+import pickle
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -126,22 +127,30 @@ def main():
 
     # ── Build dataset ─────────────────────────────────────────────────────────
     logger.info("Building RAG dataset ...")
-    dataset = []
-    skipped = 0
+    dataset  = []
+    metadata = []   # Fix 3: one entry per FAISS index position (all rows, including skipped)
+    skipped  = 0
 
     for i, row in df.iterrows():
         uid     = row["uid"]
         caption = row["description"]
 
-        # Retrieve nearest neighbour (excluding self)
-        query_emb = model.encode([caption], convert_to_tensor=False)
+        # Fix 1: use pre-computed embedding slice instead of re-encoding per caption
+        query_emb = embeddings[i:i+1]
         results   = search_faiss(index, query_emb, uids, exclude_uid=uid, top_k=1)
 
         retrieved_uid  = results[0][0] if results else None
         retrieved_path = uid_to_step_path(retrieved_uid, dfs_step_dir) if retrieved_uid else None
 
-        output_step   = load_step_data_section(row["step_path"])
+        output_step    = load_step_data_section(row["step_path"])
         retrieved_step = load_step_data_section(retrieved_path) if retrieved_path else ""
+
+        # Fix 3: accumulate before the skip so metadata[i] always matches FAISS index position i
+        metadata.append({
+            "id_original": uid,
+            "caption":     caption,
+            "output":      output_step,
+        })
 
         if not output_step:
             skipped += 1
@@ -163,6 +172,15 @@ def main():
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(dataset, f, indent=2)
     logger.info(f"Saved to {output_path}")
+
+    # Fix 3: persist FAISS index + metadata so rl_train.py retriever can load them
+    faiss_index_path    = cfg.paths.faiss_index_path
+    faiss_metadata_path = cfg.paths.faiss_metadata_path
+    os.makedirs(os.path.dirname(faiss_index_path), exist_ok=True)
+    faiss.write_index(index, faiss_index_path)
+    with open(faiss_metadata_path, "wb") as fh:
+        pickle.dump(metadata, fh)
+    logger.info(f"FAISS index saved to {faiss_index_path} ({len(metadata)} records)")
 
 
 if __name__ == "__main__":

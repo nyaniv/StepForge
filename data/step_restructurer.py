@@ -213,7 +213,7 @@ class StepRestructurer:
         if visited_in_path is None:
             visited_in_path = set()
 
-        if depth > 20 or start_entity_id in visited_in_path:
+        if start_entity_id in visited_in_path:
             return [(depth, start_entity_id, "CIRCULAR_REF")]
 
         tree = [(depth, start_entity_id, "NORMAL")]
