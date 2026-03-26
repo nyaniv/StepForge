@@ -41,9 +41,24 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
     # but not supported by OCC/OCP's strict STEP parser.
     step_content = re.sub(r"/\*.*?\*/", "", step_content)
 
-    # Inject missing ENDSEC; before DATA; — dfs_reserializer omits the header
-    # section terminator, leaving the file with only one ENDSEC; (for DATA).
-    step_content = step_content.replace("DATA;", "ENDSEC;\nDATA;", 1)
+    # The data pipeline (load_step_data_section) stores only the DATA section,
+    # so the model learns to output DATA-section-only content (no HEADER).
+    # OCC requires a complete file with a valid HEADER block to parse.
+    # Detect which format we have and reconstruct a valid file accordingly.
+    _MINIMAL_HEADER = (
+        "ISO-10303-21;\n"
+        "HEADER;\n"
+        "FILE_DESCRIPTION(('Open CASCADE Model'),'2;1');\n"
+        "FILE_NAME('','',(''),(''),'','','');\n"
+        "FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));\n"
+        "ENDSEC;\n"
+    )
+    if step_content.lstrip().startswith("DATA;"):
+        # DATA-section-only input — prepend a minimal valid STEP header.
+        step_content = _MINIMAL_HEADER + step_content.lstrip()
+    else:
+        # Old format: header present but missing its ENDSEC; terminator.
+        step_content = step_content.replace("DATA;", "ENDSEC;\nDATA;", 1)
 
     # Write to temp file (OCC requires a file path, not a string)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".step")
