@@ -10,6 +10,12 @@ The plan DFS-reserializes STEP files before writing to the split files.
 Output: three JSONL files in processed_dir/
   train.jsonl, val.jsonl, test.jsonl
 
+NOTE: This script is NOT part of the current training pipeline. It produces JSONL
+files which are incompatible with rl_train.py, evaluate.py, and diagnose_sft.py
+(all of which expect JSON arrays from data/data_split.py). Use this script for
+exploratory data work only. For the full training pipeline, run:
+  data/dataset_construct_rag.py → data/data_split.py
+
 Usage:
     python data/filter_dataset.py --config configs/config.yaml
 """
