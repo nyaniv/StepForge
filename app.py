@@ -127,6 +127,7 @@ def generate(caption: str):
                 model=model,
                 tokenizer=tokenizer,
                 retriever=retriever,
+                max_new_tokens=4096,
             )
 
             if not step_content or "END-ISO-10303-21;" not in step_content:

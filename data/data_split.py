@@ -52,7 +52,7 @@ def main():
         return uid.replace("_", "/")
 
     train_uids = {norm(u) for u in splits.get("train", [])}
-    val_uids   = {norm(u) for u in splits.get("val",   [])}
+    val_uids   = {norm(u) for u in splits.get("val") or splits.get("validation", [])}
     test_uids  = {norm(u) for u in splits.get("test",  [])}
 
     logger.info(f"Split sizes — train: {len(train_uids)}, val: {len(val_uids)}, test: {len(test_uids)}")
