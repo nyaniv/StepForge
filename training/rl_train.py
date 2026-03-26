@@ -119,7 +119,7 @@ def make_parse_reward_fn(text2cad_src: str):
 
 # ── Build RL dataset with live RAG ────────────────────────────────────────────
 
-def build_rl_dataset(train_jsonl: str, retriever: Retriever,
+def build_rl_dataset(train_json: str, retriever: Retriever,
                      tokenizer, max_completion_length: int) -> Dataset:
     """
     Build the RL training dataset.
@@ -127,23 +127,25 @@ def build_rl_dataset(train_jsonl: str, retriever: Retriever,
     tokens — these are the only examples the model can possibly complete and
     earn non-zero reward on.
     """
-    with open(train_jsonl) as f:
-        records = [json.loads(l) for l in f]
+    with open(train_json) as f:
+        records = json.load(f)   # JSON array, not JSONL
     logger.info(f"Building RL dataset from {len(records)} examples (live RAG)...")
 
     data = []
     skipped = 0
     for record in records:
-        step_ids = tokenizer(record["step"], add_special_tokens=False)["input_ids"]
+        gt_step = record.get("output") or record.get("step") or ""
+        step_ids = tokenizer(gt_step, add_special_tokens=False)["input_ids"]
         if len(step_ids) > max_completion_length:
             skipped += 1
             continue
         uid = record.get("uid") or record.get("id_original") or ""
         retrieved = retriever.retrieve(record["caption"], exclude_uid=uid)
-        prompt = format_prompt(record["caption"], retrieved["step"], tokenizer)
+        retrieved_step = retrieved.get("output") or retrieved.get("step") or ""
+        prompt = format_prompt(record["caption"], retrieved_step, tokenizer)
         data.append({
             "prompt": prompt,
-            "ground_truth_step": record["step"],
+            "ground_truth_step": gt_step,
         })
 
     logger.info(
@@ -211,9 +213,9 @@ def main():
     )
 
     # ── Build RL dataset ─────────────────────────────────────────────────────
-    train_jsonl = os.path.join(cfg.paths.processed_dir, "train.jsonl")
+    train_json = os.path.join(cfg.paths.processed_dir, "train.json")
     rl_dataset = build_rl_dataset(
-        train_jsonl, retriever, tokenizer, max_completion_length=4096
+        train_json, retriever, tokenizer, max_completion_length=4096
     )
     rl_dataset = rl_dataset.shuffle(seed=42)
 
