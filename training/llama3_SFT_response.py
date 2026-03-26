@@ -43,7 +43,7 @@ USE_RAG         = True
 from unsloth import FastLanguageModel
 import torch
 
-max_seq_length = 16384  # RoPE Scaling is handled automatically by Unsloth
+max_seq_length = _cfg.model.max_seq_length  # RoPE Scaling is handled automatically by Unsloth
 # Token budget for the retrieved STEP context. A full retrieved STEP file is
 # ~22k tokens — combined with the target output (~7k) that blows the context
 # window and causes train_on_responses_only to mask everything.
@@ -65,11 +65,11 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 # Attach LoRA adapters
 model = FastLanguageModel.get_peft_model(
     model,
-    r=16,                               # LoRA rank — 8/16/32/64 are common choices
+    r=_cfg.model.lora_r,
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                     "gate_proj", "up_proj", "down_proj"],
-    lora_alpha=16,
-    lora_dropout=0,                     # 0 is optimised in Unsloth
+    lora_alpha=_cfg.model.lora_alpha,
+    lora_dropout=0,                     # must be 0 — Unsloth kernel fusions break with dropout
     bias="none",                        # "none" is optimised in Unsloth
     use_gradient_checkpointing="unsloth",  # saves 30% VRAM; also fits 2× larger batches
     random_state=3407,
@@ -153,15 +153,15 @@ trainer = SFTTrainer(
     dataset_num_proc=2,
     packing=False,
     args=TrainingArguments(
-        per_device_train_batch_size=2,
-        gradient_accumulation_steps=4,
-        warmup_steps=1200,
-        num_train_epochs=40,
-        learning_rate=5e-5,
+        per_device_train_batch_size=_cfg.sft.per_device_train_batch_size,
+        gradient_accumulation_steps=_cfg.sft.gradient_accumulation_steps,
+        warmup_ratio=_cfg.sft.warmup_ratio,
+        num_train_epochs=_cfg.sft.num_epochs,
+        learning_rate=_cfg.sft.learning_rate,
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
-        logging_steps=100,
-        optim="adamw_8bit",
+        logging_steps=10,
+        optim=_cfg.sft.optim,
         weight_decay=0.01,
         lr_scheduler_type="linear",
         seed=3407,
