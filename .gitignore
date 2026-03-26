@@ -26,3 +26,6 @@ __pycache__/
 
 # Environment files
 .env
+
+# Claude Code project settings (local permissions, session-specific)
+.claude/
