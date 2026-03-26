@@ -117,7 +117,7 @@ def main():
     logger.info("Encoding captions with all-MiniLM-L6-v2 ...")
     model = SentenceTransformer("all-MiniLM-L6-v2")
     embeddings = model.encode(df["description"].tolist(), convert_to_tensor=False,
-                               show_progress_bar=True)
+                               normalize_embeddings=True, show_progress_bar=True)
     embeddings = np.array(embeddings)
 
     # ── Build FAISS index ─────────────────────────────────────────────────────

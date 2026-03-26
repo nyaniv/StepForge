@@ -1,4 +1,13 @@
 """
+DEPRECATED — DO NOT RUN THIS SCRIPT.
+
+Use training/llama3_SFT_response.py instead.
+
+This script uses an old <|system|>/<|user|>/<|assistant|> prompt format that does not
+match the current data pipeline or RL training. Running it will produce a checkpoint
+that is incompatible with rl_train.py, evaluate.py, and inference/generate.py.
+
+----------------------------------------------------------------------
 Supervised Fine-Tuning (SFT) with LoRA via Unsloth.
 
 From paper Sections 3.2 and 4.1.
@@ -29,6 +38,11 @@ Prerequisites:
 Usage:
     python training/sft_train.py --config configs/config.yaml
 """
+
+raise SystemExit(
+    "\n\nDEPRECATED: sft_train.py uses an old prompt format incompatible with the "
+    "current pipeline.\nRun training/llama3_SFT_response.py instead.\n"
+)
 
 import argparse
 import glob

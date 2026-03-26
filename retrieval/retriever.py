@@ -44,7 +44,7 @@ class Retriever:
             exclude_uid: UID to exclude (prevents self-retrieval during training)
 
         Returns:
-            dict with keys "uid", "caption", "step"
+            dict with keys "id_original", "caption", "output"
         """
         emb = self.model.encode(
             [query_caption],
