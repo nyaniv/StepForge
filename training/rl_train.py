@@ -53,20 +53,20 @@ from reward.scd_reward import compute_reward, compute_parse_reward
 
 # ── Prompt format (identical to SFT) ──────────────────────────────────────────
 
-SYSTEM_MSG = (
-    "Given the object description and relevant CAD data, "
-    "generate the corresponding STEP file."
+ABC_PROMPT_RAG = (
+    "You are a CAD model generation assistant trained to produce STEP (.step) files "
+    "based on textual descriptions. Given the following object description and relevant "
+    "retrieved CAD data, generate a STEP file that accurately represents the described object."
+    "\n\n\n### caption:\n{}\n\n### retrieved relevant step file:\n{}\n\n### output:\n"
 )
 
+MAX_RETRIEVED_TOKENS = 500  # must match training/llama3_SFT_response.py
 
-def format_prompt(caption: str, retrieved_step: str) -> str:
-    return (
-        f"<|system|>\n{SYSTEM_MSG}\n"
-        f"<|user|>\n"
-        f"caption: {caption}\n"
-        f"retrieved step file:\n{retrieved_step}\n"
-        f"<|assistant|>\n"
-    )
+
+def format_prompt(caption: str, retrieved_step: str, tokenizer) -> str:
+    ids = tokenizer(retrieved_step, add_special_tokens=False)["input_ids"]
+    truncated = tokenizer.decode(ids[:MAX_RETRIEVED_TOKENS])
+    return ABC_PROMPT_RAG.format(caption, truncated)
 
 
 # ── Format reward (completion bonus) ──────────────────────────────────────────
@@ -138,15 +138,9 @@ def build_rl_dataset(train_jsonl: str, retriever: Retriever,
         if len(step_ids) > max_completion_length:
             skipped += 1
             continue
-        retrieved = retriever.retrieve(record["caption"], exclude_uid=record["uid"])
-        # Truncate retrieved STEP to 500 tokens — same as SFT — so the model
-        # cannot copy the context and must generate original geometry.
-        retrieved_ids = tokenizer(retrieved["step"], add_special_tokens=False)["input_ids"]
-        if len(retrieved_ids) > 500:
-            retrieved_step = tokenizer.decode(retrieved_ids[:500], skip_special_tokens=True)
-        else:
-            retrieved_step = retrieved["step"]
-        prompt = format_prompt(record["caption"], retrieved_step)
+        uid = record.get("uid") or record.get("id_original") or ""
+        retrieved = retriever.retrieve(record["caption"], exclude_uid=uid)
+        prompt = format_prompt(record["caption"], retrieved["step"], tokenizer)
         data.append({
             "prompt": prompt,
             "ground_truth_step": record["step"],

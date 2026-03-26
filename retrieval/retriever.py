@@ -56,7 +56,8 @@ class Retriever:
 
         for idx in indices[0]:
             rec = self.records[int(idx)]
-            if exclude_uid is None or rec["uid"] != exclude_uid:
+            rec_uid = rec.get("uid") or rec.get("id_original") or ""
+            if exclude_uid is None or rec_uid != exclude_uid:
                 return rec
 
         # Fallback: return top-1 even if it's self (shouldn't happen in practice)
@@ -80,7 +81,8 @@ class Retriever:
             exclude = exclude_uids[i] if exclude_uids and i < len(exclude_uids) else None
             for idx in query_indices:
                 rec = self.records[int(idx)]
-                if exclude is None or rec["uid"] != exclude:
+                rec_uid = rec.get("uid") or rec.get("id_original") or ""
+                if exclude is None or rec_uid != exclude:
                     results.append(rec)
                     break
             else:
