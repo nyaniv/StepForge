@@ -214,33 +214,47 @@ def _log_fmt_stats(tag: str):
 import json
 from datasets import Dataset
 
-logger.info(f"Loading train data from {TRAIN_JSON}")
-with open(TRAIN_JSON) as f:
-    train_records = json.load(f)
-dataset = Dataset.from_list(train_records)
-del train_records
-logger.info(f"  Raw train records: {len(dataset)}")
+_FORMATTED_TRAIN = os.path.join(OUTPUT_DIR, "formatted_train")
+_FORMATTED_TEST  = os.path.join(OUTPUT_DIR, "formatted_test")
 
-logger.info(f"Loading test data from {TEST_JSON}")
-with open(TEST_JSON) as f:
-    test_records = json.load(f)
-test_dataset = Dataset.from_list(test_records)
-del test_records
-logger.info(f"  Raw test records:  {len(test_dataset)}")
+if os.path.exists(_FORMATTED_TRAIN) and os.path.exists(_FORMATTED_TEST):
+    logger.info(f"Loading pre-formatted datasets from disk (skipping map)...")
+    dataset      = Dataset.load_from_disk(_FORMATTED_TRAIN)
+    test_dataset = Dataset.load_from_disk(_FORMATTED_TEST)
+    logger.info(f"  Train: {len(dataset)}  |  Test: {len(test_dataset)}")
+else:
+    logger.info(f"Loading train data from {TRAIN_JSON}")
+    with open(TRAIN_JSON) as f:
+        train_records = json.load(f)
+    dataset = Dataset.from_list(train_records)
+    del train_records
+    logger.info(f"  Raw train records: {len(dataset)}")
 
-logger.info("Formatting train dataset...")
-dataset      = dataset.map(formatting_prompts_func, batched=True)
-_log_fmt_stats("train")
+    logger.info(f"Loading test data from {TEST_JSON}")
+    with open(TEST_JSON) as f:
+        test_records = json.load(f)
+    test_dataset = Dataset.from_list(test_records)
+    del test_records
+    logger.info(f"  Raw test records:  {len(test_dataset)}")
 
-# Reset counters for test set
-for k in ("total", "truncated", "missing_caption", "missing_output", "missing_retrieved"):
-    _fmt_stats[k] = 0
-_fmt_stats["truncation_lengths"].clear()
-_fmt_stats["seq_lengths"].clear()
+    logger.info("Formatting train dataset...")
+    dataset = dataset.map(formatting_prompts_func, batched=True)
+    _log_fmt_stats("train")
 
-logger.info("Formatting test dataset...")
-test_dataset = test_dataset.map(formatting_prompts_func, batched=True)
-_log_fmt_stats("test")
+    # Reset counters for test set
+    for k in ("total", "truncated", "missing_caption", "missing_output", "missing_retrieved"):
+        _fmt_stats[k] = 0
+    _fmt_stats["truncation_lengths"].clear()
+    _fmt_stats["seq_lengths"].clear()
+
+    logger.info("Formatting test dataset...")
+    test_dataset = test_dataset.map(formatting_prompts_func, batched=True)
+    _log_fmt_stats("test")
+
+    logger.info("Saving formatted datasets to disk for future runs...")
+    dataset.save_to_disk(_FORMATTED_TRAIN)
+    test_dataset.save_to_disk(_FORMATTED_TEST)
+    logger.info(f"  Saved to {_FORMATTED_TRAIN} and {_FORMATTED_TEST}")
 
 logger.info(f"Final train size: {len(dataset)}  |  test size: {len(test_dataset)}")
 
