@@ -32,7 +32,7 @@ data:
 
 model:
   base_model: "meta-llama/Llama-3.2-3B-Instruct"  # best per paper Table 3
-  max_seq_length: 16384
+  max_seq_length: 8192
   lora_r: 16
   lora_alpha: 32
   lora_dropout: 0.05
@@ -41,7 +41,7 @@ sft:
   per_device_train_batch_size: 2    # reduced from 4; 500-token context OOMs at 4
   gradient_accumulation_steps: 8    # increased from 4; keeps effective batch=16
   learning_rate: 2.0e-4             # paper
-  num_epochs: 10                    # paper
+  num_epochs: 1                     # smoke test — 1 epoch to verify SFT works before full run
   warmup_ratio: 0.05                # paper
   optim: "adamw_8bit"               # paper
 
