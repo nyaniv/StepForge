@@ -211,14 +211,21 @@ def _log_fmt_stats(tag: str):
 
 
 # ── Dataset ─────────────────────────────────────────────────────────────────────
-from datasets import load_dataset
+import json
+from datasets import Dataset
 
 logger.info(f"Loading train data from {TRAIN_JSON}")
-dataset      = load_dataset("json", data_files=TRAIN_JSON, split="train")
+with open(TRAIN_JSON) as f:
+    train_records = json.load(f)
+dataset = Dataset.from_list(train_records)
+del train_records
 logger.info(f"  Raw train records: {len(dataset)}")
 
 logger.info(f"Loading test data from {TEST_JSON}")
-test_dataset = load_dataset("json", data_files=TEST_JSON, split="train")
+with open(TEST_JSON) as f:
+    test_records = json.load(f)
+test_dataset = Dataset.from_list(test_records)
+del test_records
 logger.info(f"  Raw test records:  {len(test_dataset)}")
 
 logger.info("Formatting train dataset...")
