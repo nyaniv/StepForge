@@ -58,11 +58,14 @@ from unsloth import FastLanguageModel
 import torch
 
 max_seq_length = _cfg.model.max_seq_length  # RoPE Scaling is handled automatically by Unsloth
-# Token budget for the retrieved STEP context. A full retrieved STEP file is
-# ~22k tokens — combined with the target output (~7k) that blows the context
-# window and causes train_on_responses_only to mask everything.
-# 500 tokens keeps the RAG context meaningful while leaving ~9k tokens for
-# the target output within the 16384 limit.
+# Token budget for the retrieved STEP context.
+# A typical retrieved STEP file (~265 entities at ~14 tok/entity) is ~3,700–4,200 tokens.
+# DFS ordering front-loads root structure (shell, faces, axes) so the first ~35 entities
+# (~500 tokens) carry the bulk of useful structural signal; trailing entities are mostly
+# repeated CARTESIAN_POINT coordinates specific to the retrieved shape.
+# 500 tokens is a deliberate cost-saving choice. The paper does not truncate retrieved
+# context — increasing MAX_RETRIEVED_TOKENS improves RAG fidelity at the cost of
+# proportionally less room for the GT STEP output within max_seq_length.
 MAX_RETRIEVED_TOKENS = 500
 dtype = None            # None = auto-detect (bfloat16 on Ampere+, float16 on older GPUs)
 load_in_4bit = False    # Set True to use 4-bit quantisation (reduces VRAM, slight quality loss)
@@ -156,8 +159,7 @@ def formatting_prompts_func(examples):
                 logger.warning(f"[fmt] Missing retrieved_step at index {_fmt_stats['total']}")
 
             # Truncate retrieved STEP to MAX_RETRIEVED_TOKENS.
-            # Full retrieved STEP is ~22k tokens; combined with ~7k output tokens
-            # it far exceeds the context window and masks all response labels.
+            # See comment above MAX_RETRIEVED_TOKENS for rationale.
             ids = tokenizer(input_ or "", add_special_tokens=False)["input_ids"]
             if len(ids) > MAX_RETRIEVED_TOKENS:
                 _fmt_stats["truncated"] += 1
