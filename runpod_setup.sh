@@ -102,6 +102,7 @@ pip install --quiet --no-cache-dir --root-user-action=ignore \
     "gradio" \
     "transformers>=4.51.3" \
     "trl==0.29.0" \
+    "mergekit" \
     "peft>=0.10" \
     "datasets" \
     "sentence-transformers" \
