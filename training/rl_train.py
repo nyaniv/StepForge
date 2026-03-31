@@ -39,6 +39,7 @@ if "HF_HOME" not in os.environ:
     _vol = os.environ.get("VOLUME", "/runpod-volume")
     os.environ["HF_HOME"] = os.path.join(_vol, ".hf-cache")
 
+import time
 import torch
 from datasets import Dataset
 from loguru import logger
@@ -169,6 +170,15 @@ def main():
 
     cfg = OmegaConf.load(args.config)
 
+    # ── File logging ─────────────────────────────────────────────────────────
+    os.makedirs(cfg.paths.rl_checkpoint_dir, exist_ok=True)
+    _log_path = os.path.join(cfg.paths.rl_checkpoint_dir, "rl_train.log")
+    logger.add(_log_path, level="DEBUG", format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}", enqueue=True)
+    logger.add(sys.stdout, level="INFO",  format="{time:HH:mm:ss} | {level} | {message}")
+    logger.info(f"Logging to {_log_path}")
+    _train_start = time.time()
+    # ── End file logging ─────────────────────────────────────────────────────
+
     hf_token = os.environ.get("HUGGINGFACE_TOKEN")
     if not hf_token:
         raise EnvironmentError("HUGGINGFACE_TOKEN environment variable not set.")
@@ -276,10 +286,13 @@ def main():
         logger.info(f"Resuming RL from checkpoint: {rl_resume_from}")
     trainer.train(resume_from_checkpoint=rl_resume_from)
 
+    _train_elapsed = time.time() - _train_start
+    logger.info(f"RL training complete in {_train_elapsed/3600:.2f}h")
+
     final_path = os.path.join(cfg.paths.rl_checkpoint_dir, "final")
     model.save_pretrained(final_path)
     tokenizer.save_pretrained(final_path)
-    logger.info(f"RL training complete. Model saved to {final_path}")
+    logger.info(f"Model saved to {final_path}")
 
 
 if __name__ == "__main__":
