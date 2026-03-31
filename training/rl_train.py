@@ -265,7 +265,6 @@ def main():
         per_device_train_batch_size=cfg.rl.per_device_train_batch_size,
         gradient_accumulation_steps=cfg.rl.gradient_accumulation_steps,
         max_steps=cfg.rl.max_steps,
-        max_prompt_length=1024,        # prompts are ~700 tokens; prevents silent truncation
         max_completion_length=4096,   # covers 40.9% of examples; sdpa fits 80GB
         bf16=True,
         logging_steps=1,
