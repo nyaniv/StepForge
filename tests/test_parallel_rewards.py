@@ -58,13 +58,21 @@ def test_correctness():
 
 
 def test_order_preserved():
-    """Output order matches input order even when tasks finish out of order."""
-    # Make later tasks finish faster
-    delays = [0.3, 0.2, 0.1, 0.05, 0.01]
-    completions   = [f"comp_{i}" * (i + 1) for i in range(5)]
-    ground_truths = [f"gt_{i}"   * (i + 1) for i in range(5)]  # same lengths → all 1.0
+    """Output order matches input order even when tasks finish out of order.
+
+    Tasks are submitted with decreasing delays (task 0 slowest, task 4 fastest)
+    so they complete in reverse order. The output must still match input order.
+    Expected: [0.5, 1.0, 0.5, 1.0, 0.5]  (alternating, based on length match)
+    """
+    # Make later tasks finish faster — they'd arrive out of order if order weren't preserved
+    delays = [0.30, 0.20, 0.10, 0.05, 0.01]
+    # Odd indices: same length → reward 1.0.  Even indices: different length → reward 0.5.
+    completions   = ["aa",   "bbb", "cc",   "ddd", "ee"  ]
+    ground_truths = ["xxxx", "bbb", "yyyy", "ddd", "zzzz"]
+    expected      = [0.5,    1.0,   0.5,    1.0,   0.5  ]
 
     seq = sequential_rewards(completions, ground_truths, delay=0.0)
+    assert seq == expected, f"Sequential baseline wrong: {seq}"
 
     with ThreadPoolExecutor(max_workers=len(completions)) as pool:
         futures = [
@@ -73,8 +81,8 @@ def test_order_preserved():
         ]
         par = [f.result() for f in futures]
 
-    assert seq == par, f"Order mismatch:\n  seq: {seq}\n  par: {par}"
-    print(f"  PASS order preserved: {par}")
+    assert par == expected, f"Order mismatch:\n  expected: {expected}\n  parallel: {par}"
+    print(f"  PASS order preserved: {par}  (tasks completed in reverse order, output still correct)")
 
 
 def test_speedup():
