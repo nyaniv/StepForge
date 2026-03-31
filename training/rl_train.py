@@ -24,6 +24,12 @@ Usage:
     python training/rl_train.py --config configs/config.yaml --sft-checkpoint path/to/sft
 """
 
+import multiprocessing as mp
+# Must be set before any CUDA or torch import.  compute_reward() spawns
+# subprocesses for OCP tessellation; forking after CUDA init corrupts GPU
+# handles in the child and causes non-deterministic hangs.
+mp.set_start_method("spawn", force=True)
+
 import argparse
 import glob
 import inspect

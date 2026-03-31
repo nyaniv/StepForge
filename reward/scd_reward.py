@@ -1,7 +1,7 @@
 """
 Scaled Chamfer Distance reward for RL training.
 
-Implements paper Equations 1–3 exactly.
+Implements paper Equations 1-3 exactly.
 
 Eq. 1 — Bidirectional Chamfer Distance:
     CD(P, Q) = mean_{p∈P} min_{q∈Q} ||p-q||² + mean_{q∈Q} min_{p∈P} ||p-q||²
@@ -94,9 +94,19 @@ def compute_parse_reward(generated_step: str, text2cad_src: str | None = None,
     proc = mp.Process(target=_parse_worker, args=(queue, generated_step, text2cad_src))
     proc.start()
     proc.join(timeout=30)
-    if proc.exitcode != 0 or queue.empty():
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(5)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+    queue.close()
+    if proc.exitcode != 0:
         return 0.0
-    return reward_value if queue.get() == 1 else 0.0
+    try:
+        return reward_value if queue.get_nowait() == 1 else 0.0
+    except Exception:
+        return 0.0
 
 
 # ── Subprocess worker (isolates Open3D segfaults) ─────────────────────────────
@@ -187,10 +197,22 @@ def compute_reward(
     )
     proc.start()
     proc.join(timeout=60)  # 60 s hard cap per reward call
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(5)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+    queue.close()
 
-    if proc.exitcode != 0 or queue.empty():
+    if proc.exitcode != 0:
         if verbose:
-            print(f"[compute_reward] subprocess failed: exitcode={proc.exitcode}, empty={queue.empty()}")
+            print(f"[compute_reward] subprocess failed: exitcode={proc.exitcode}")
         return 0.0
 
-    return queue.get()
+    try:
+        return queue.get_nowait()
+    except Exception:
+        if verbose:
+            print("[compute_reward] subprocess exited cleanly but queue was empty")
+        return 0.0
