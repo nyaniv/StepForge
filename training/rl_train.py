@@ -275,7 +275,8 @@ def main():
         bf16=True,
         logging_steps=1,
         save_steps=20,
-        report_to="none",
+        report_to="tensorboard",
+        seed=42,
     )
 
     model.config.use_cache = False

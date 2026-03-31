@@ -13,6 +13,8 @@ import re
 import sys
 import tempfile
 
+import hashlib
+
 import numpy as np
 
 
@@ -123,8 +125,13 @@ def step_to_pointcloud(step_content: str, n_points: int = 2048,
         unique_pts = len(np.unique(pts, axis=0))
         if verbose:
             print(f"[step_to_pointcloud] OK: faces={n_faces}, raw_pts={len(pts)}, unique_pts={unique_pts}")
-        # Sample with replacement if fewer mesh points than requested
-        idx = np.random.choice(len(pts), size=n_points, replace=(len(pts) < n_points))
+        # Seed from content hash so the same STEP always produces the same sample.
+        # Must use hashlib (not Python's hash()) — hash() is salted per process,
+        # giving different seeds across spawn'd subprocesses for identical inputs.
+        seed = int.from_bytes(
+            hashlib.sha256(step_content.encode(errors="replace")).digest()[:4], "big"
+        )
+        idx = np.random.default_rng(seed).choice(len(pts), size=n_points, replace=(len(pts) < n_points))
         return pts[idx]
 
     except Exception as e:

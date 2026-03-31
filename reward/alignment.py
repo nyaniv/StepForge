@@ -33,7 +33,13 @@ def align_point_clouds(pred: np.ndarray, gt: np.ndarray) -> np.ndarray:
     gt_o3d = o3d.geometry.PointCloud()
     gt_o3d.points = o3d.utility.Vector3dVector(gt_c)
 
-    voxel = 0.05
+    # Adaptive voxel: 2% of GT's RMS radius.  A fixed absolute value (e.g.
+    # 0.05) is meaningless across parts of different scales — RANSAC neighborhoods
+    # either collapse to a single voxel or become near-identical, both causing
+    # silent alignment failure.  gt_c is already centred so mean≈0 and RMS
+    # radius is the natural scale reference (same formula used in scd_reward.py).
+    gt_rms = float(np.sqrt(np.mean(np.sum(gt_c ** 2, axis=1))))
+    voxel = max(gt_rms * 0.02, 1e-6)  # floor prevents division-by-zero on degenerate clouds
 
     # Estimate normals (required for FPFH)
     for pcd in [pred_o3d, gt_o3d]:
