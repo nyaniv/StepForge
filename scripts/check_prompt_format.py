@@ -33,7 +33,7 @@ ABC_PROMPT_RAG = (
     "You are a CAD model generation assistant trained to produce STEP (.step) files "
     "based on textual descriptions. Given the following object description and relevant "
     "retrieved CAD data, generate a STEP file that accurately represents the described object."
-    "\n\n\n### caption:\n{}\n\n### retrieved relevant step file:\n{}\n\n### output:\n{}"
+    "\n\n\n### caption:\n{}\n\n### retrieved relevant step file:\n{}\n\n### output:\n"
 )
 
 
