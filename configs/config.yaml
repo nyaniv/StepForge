@@ -22,7 +22,7 @@ model:
   max_seq_length: 8192
   lora_r: 16
   lora_alpha: 32
-  lora_dropout: 0.05
+  lora_dropout: 0.0   # must be 0 — Unsloth kernel fusions break with non-zero dropout
 
 sft:
   per_device_train_batch_size: 2

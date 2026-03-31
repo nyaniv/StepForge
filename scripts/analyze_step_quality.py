@@ -343,7 +343,7 @@ def generate_sft_outputs(cfg, checkpoint: str, records: list[dict], n: int) -> l
         model_name=cfg.retrieval.model,
     )
 
-    MAX_RETRIEVED_TOKENS = 500  # must match training/llama3_SFT_response.py
+    MAX_RETRIEVED_TOKENS = 500  # must match llama3_SFT_response.py — cost-saving truncation, see comment there
 
     ABC_PROMPT_RAG = (
         "You are a CAD model generation assistant trained to produce STEP (.step) files "

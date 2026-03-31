@@ -38,7 +38,8 @@ def build_index(train_jsonl: str, index_path: str, metadata_path: str,
     Uses IndexFlatIP on L2-normalized embeddings = exact cosine similarity search.
     """
     logger.info(f"Loading training data from {train_jsonl}")
-    records = [json.loads(l) for l in open(train_jsonl)]
+    with open(train_jsonl) as f:
+        records = [json.loads(l) for l in f]
     captions = [r["caption"] for r in records]
     logger.info(f"Embedding {len(captions)} captions with {model_name}")
 
@@ -56,7 +57,8 @@ def build_index(train_jsonl: str, index_path: str, metadata_path: str,
 
     Path(index_path).parent.mkdir(parents=True, exist_ok=True)
     faiss.write_index(index, index_path)
-    pickle.dump(records, open(metadata_path, "wb"))
+    with open(metadata_path, "wb") as fh:
+        pickle.dump(records, fh)
 
     logger.info(f"Index built: {len(records)} entries")
     logger.info(f"  FAISS index → {index_path}")

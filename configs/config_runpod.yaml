@@ -7,9 +7,8 @@
 #
 # A100 SXM 80 GB differences vs. Scholar config:
 #   - bf16 training (native A100 tensor cores; more stable than fp16)
-#   - SFT per_device_train_batch_size 2→4, gradient_accumulation_steps 8→4
-#     (same effective batch=16 with half the accumulation steps = faster wall time)
-#   - RL  per_device_train_batch_size 1→2, gradient_accumulation_steps 8→4
+#   - SFT per_device_train_batch_size=2, gradient_accumulation_steps=8 (effective batch=16)
+#   - RL  per_device_train_batch_size=1, gradient_accumulation_steps=8 (effective batch=8)
 
 paths:
   # Raw data (on Network Volume — downloaded once by runpod_setup.sh)
@@ -35,7 +34,7 @@ model:
   max_seq_length: 8192
   lora_r: 16
   lora_alpha: 32
-  lora_dropout: 0.05
+  lora_dropout: 0.0   # must be 0 — Unsloth kernel fusions break with non-zero dropout
 
 sft:
   per_device_train_batch_size: 2    # reduced from 4; 500-token context OOMs at 4

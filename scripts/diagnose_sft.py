@@ -36,7 +36,7 @@ ABC_PROMPT_RAG = (
     "\n\n\n### caption:\n{}\n\n### retrieved relevant step file:\n{}\n\n### output:\n"
 )
 
-MAX_RETRIEVED_TOKENS = 500  # must match training/llama3_SFT_response.py
+MAX_RETRIEVED_TOKENS = 500  # must match llama3_SFT_response.py — cost-saving truncation, see comment there
 
 
 def format_prompt(caption: str, retrieved_step: str, tokenizer) -> str:
