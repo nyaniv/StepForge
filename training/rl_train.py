@@ -36,6 +36,7 @@ import inspect
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -96,16 +97,18 @@ def make_reward_fn(text2cad_src: str, delta_low: float, delta_high: float,
 
     def reward_fn(completions: list[str], ground_truth_step: list[str],
                   **kwargs) -> list[float]:
-        return [
-            compute_reward(
-                gen, gt,
-                n_points=n_points,
-                delta_low=delta_low,
-                delta_high=delta_high,
-                text2cad_src=text2cad_src,
-            )
-            for gen, gt in zip(completions, ground_truth_step)
-        ]
+        with ThreadPoolExecutor(max_workers=len(completions)) as pool:
+            futures = [
+                pool.submit(
+                    compute_reward, gen, gt,
+                    n_points=n_points,
+                    delta_low=delta_low,
+                    delta_high=delta_high,
+                    text2cad_src=text2cad_src,
+                )
+                for gen, gt in zip(completions, ground_truth_step)
+            ]
+            return [f.result() for f in futures]
 
     return reward_fn
 
@@ -116,10 +119,12 @@ def make_parse_reward_fn(text2cad_src: str):
     """Return a GRPO-compatible parse reward function."""
 
     def parse_reward_fn(completions: list[str], **kwargs) -> list[float]:
-        return [
-            compute_parse_reward(gen, text2cad_src=text2cad_src)
-            for gen in completions
-        ]
+        with ThreadPoolExecutor(max_workers=len(completions)) as pool:
+            futures = [
+                pool.submit(compute_parse_reward, gen, text2cad_src=text2cad_src)
+                for gen in completions
+            ]
+            return [f.result() for f in futures]
 
     return parse_reward_fn
 
