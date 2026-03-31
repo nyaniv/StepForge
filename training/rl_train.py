@@ -134,8 +134,16 @@ def build_rl_dataset(train_json: str, retriever: Retriever,
 
     data = []
     skipped = 0
-    for record in records:
+    # ~4 chars per token is a safe upper bound for STEP files
+    char_limit = max_completion_length * 4
+    for i, record in enumerate(records):
+        if i % 5000 == 0:
+            logger.info(f"  Building RL dataset: {i}/{len(records)} (kept={len(data)}, skipped={skipped})")
         gt_step = record.get("output") or record.get("step") or ""
+        # Pre-filter by char length to avoid tokenizing huge files
+        if len(gt_step) > char_limit:
+            skipped += 1
+            continue
         step_ids = tokenizer(gt_step, add_special_tokens=False)["input_ids"]
         if len(step_ids) > max_completion_length:
             skipped += 1
