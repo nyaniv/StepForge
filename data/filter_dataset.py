@@ -43,11 +43,22 @@ def count_entities(step_content: str) -> int:
 
 def reserialize_step(step_content: str, uid: str) -> str | None:
     """
-    DFS-reserialize a STEP string.  Returns None if parsing fails.
+    DFS-reserialize a STEP string.  Returns None on any parse failure or
+    entity-count mismatch (lossy parse).
     """
     try:
         header, entities, referenced_by = parse_step_from_string(step_content)
         if not entities:
+            return None
+        # S5/C10: parser used to silently 'continue' past unmatchable lines.
+        # It now raises (caught above), but as a belt-and-braces check verify
+        # entity counts match — DFS reserialization is a reorder, not a filter.
+        n_input = count_entities(step_content)
+        if len(entities) != n_input:
+            logger.warning(
+                f"Entity count mismatch for {uid}: parsed {len(entities)} of "
+                f"{n_input} input entities — skipping (lossy parse)"
+            )
             return None
         return reserialize(header, entities, referenced_by)
     except Exception as e:

@@ -22,9 +22,13 @@ Usage:
 import json
 import os
 import pickle
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Determinism for SentenceTransformer GPU encode (matches retrieval/build_index.py).
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import faiss
 import numpy as np
@@ -46,7 +50,9 @@ def uid_to_step_path(uid: str, dfs_step_dir: str) -> str | None:
 def load_step_data_section(step_path: str) -> str:
     """Extract the DATA section from a STEP file (everything from DATA; onwards)."""
     try:
-        with open(step_path, "r", encoding="utf-8", errors="ignore") as f:
+        # W12: errors="replace" leaves a visible � marker; "ignore" silently
+        # drops bytes mid-coordinate, producing valid-looking but wrong numbers.
+        with open(step_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except Exception:
         return ""
@@ -58,26 +64,42 @@ def load_step_data_section(step_path: str) -> str:
             collecting = True
         if collecting:
             data_lines.append(line.strip())
-    return "\n".join(data_lines)
+    text = "\n".join(data_lines)
+    # Pipeline step 3 (round_step_numbers.py) was never wired between
+    # step_restructurer.py output and this consumer. Inline it so training
+    # labels carry 6-decimal floats instead of raw 15-digit OCC precision.
+    from data.round_step_numbers import round_float_numbers
+    return round_float_numbers(text)
+
+
+_ENTITY_RE = re.compile(r"^#\d+\s*=", re.MULTILINE)
+
+
+def count_entities(step_text: str) -> int:
+    """Count STEP entity definitions in a DATA section string."""
+    return len(_ENTITY_RE.findall(step_text))
 
 
 def build_faiss_index(embeddings: np.ndarray):
-    """Build a FAISS L2 index over the embeddings."""
+    """Build a FAISS IndexFlatIP (cosine sim on normalized vectors, paper §3.2)."""
     dim = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dim)
+    # W7: Was IndexFlatL2. On L2-normalized vectors L2 and IP give identical
+    # rankings, but the implicit equivalence breaks if anyone disables
+    # normalization. Match build_index.py and the paper's "cosine similarity".
+    index = faiss.IndexFlatIP(dim)
     index.add(embeddings)
     return index
 
 
 def search_faiss(index, query_emb: np.ndarray, uids: list, exclude_uid: str, top_k: int = 1):
     """Search FAISS, excluding the query's own uid. Returns list of (uid, similarity)."""
-    distances, indices = index.search(query_emb, top_k + 1)
+    # IndexFlatIP on normalized vectors returns cosine similarity directly (range [-1, 1]).
+    scores, indices = index.search(query_emb, top_k + 1)
     results = []
     for i, idx in enumerate(indices[0]):
         uid = uids[idx]
         if uid != exclude_uid:
-            sim = 1 / (1 + distances[0][i])
-            results.append((uid, sim))
+            results.append((uid, float(scores[0][i])))
         if len(results) == top_k:
             break
     return results
@@ -113,48 +135,102 @@ def main():
     df = df[df["step_path"].notna()].reset_index(drop=True)
     logger.info(f"Kept {len(df)} UIDs with STEP files")
 
+    # ── C4: Restrict the persisted FAISS index to TRAIN UIDs only ─────────────
+    # The index built here is saved to cfg.paths.faiss_index_path and consumed by
+    # rl_train.py and evaluate.py. Indexing all splits leaks val/test as RAG
+    # templates (paper §3.2: index is over training captions). Retrieval for
+    # building rag_dataset.json (below) uses ALL captions so val/test rows still
+    # get a relevant template; only the persisted index is train-restricted.
+    with open(cfg.paths.split_json) as f:
+        split_data = json.load(f)
+    def _norm(u: str) -> str:
+        return u.replace("_", "/")
+    train_uid_set = {_norm(u) for u in split_data.get("train", [])}
+    df["is_train"] = df["uid"].apply(lambda u: _norm(u) in train_uid_set)
+    n_train_idx = int(df["is_train"].sum())
+    logger.info(f"Train-only index: {n_train_idx} of {len(df)} UIDs are in the train split")
+    if n_train_idx == 0:
+        raise RuntimeError(
+            f"No UIDs from {cfg.paths.split_json} 'train' split match the loaded "
+            f"STEP files. Check UID normalization or split file format."
+        )
+
     # ── Encode captions ───────────────────────────────────────────────────────
     logger.info("Encoding captions with all-MiniLM-L6-v2 ...")
     model = SentenceTransformer("all-MiniLM-L6-v2")
+    # W8: explicit float32 (FAISS requirement) + batch_size=256 to match build_index.py
     embeddings = model.encode(df["description"].tolist(), convert_to_tensor=False,
-                               normalize_embeddings=True, show_progress_bar=True)
-    embeddings = np.array(embeddings)
+                               normalize_embeddings=True, show_progress_bar=True,
+                               batch_size=256)
+    embeddings = np.asarray(embeddings, dtype=np.float32)
 
-    # ── Build FAISS index ─────────────────────────────────────────────────────
-    logger.info("Building FAISS index ...")
-    index = build_faiss_index(embeddings)
-    uids  = df["uid"].tolist()
+    # ── Build FAISS index (train-only, both for retrieval AND persistence) ──
+    # The previous all-splits in-memory index leaked test geometry into training
+    # prompts: a train record's nearest neighbour could be a test record, baked
+    # into relavant_step_file. Retrieve from train-only here too — val/test rows
+    # will retrieve a train template, which is exactly what evaluate.py does.
+    train_mask = df["is_train"].to_numpy()
+    train_embs = embeddings[train_mask]
+    train_uids = df.loc[train_mask, "uid"].tolist()
+    train_paths = df.loc[train_mask, "step_path"].tolist()
+    train_row_to_df_idx = np.flatnonzero(train_mask)
 
-    # ── Build dataset ─────────────────────────────────────────────────────────
+    logger.info(f"Building train-only FAISS index ({len(train_uids)} records) ...")
+    index = build_faiss_index(train_embs)
+
+    # ── Preload all STEP outputs (we need them for both metadata filtering and dataset) ──
+    logger.info("Loading STEP DATA sections ...")
+    max_entities = cfg.data.max_entities
+    output_steps: dict[str, str] = {}
+    for i, row in df.iterrows():
+        s = load_step_data_section(row["step_path"])
+        output_steps[row["uid"]] = s
+        if (i + 1) % 5000 == 0:
+            logger.info(f"  {i+1}/{len(df)} STEP files loaded")
+
+    # ── Build persisted metadata aligned to the train-only index ──
+    # Only include records that pass the same filters as the training set, so
+    # rl_train.py / evaluate.py never retrieve an empty or >max_entities template.
+    metadata: list[dict] = []
+    keep_in_index = np.zeros(len(train_uids), dtype=bool)
+    for j, uid in enumerate(train_uids):
+        s = output_steps[uid]
+        if s and count_entities(s) < max_entities:
+            keep_in_index[j] = True
+            metadata.append({
+                "id_original": uid,
+                "caption":     df.at[train_row_to_df_idx[j], "description"],
+                "output":      s,
+            })
+    persist_embs = train_embs[keep_in_index]
+    logger.info(f"Persisted index: {len(metadata)} records pass entity/non-empty filter "
+                f"(dropped {len(train_uids) - len(metadata)} train records)")
+
+    # ── Build dataset (all splits — data_split.py partitions afterwards) ──
     logger.info("Building RAG dataset ...")
     dataset  = []
-    metadata = []   # Fix 3: one entry per FAISS index position (all rows, including skipped)
     skipped  = 0
-
     for i, row in df.iterrows():
         uid     = row["uid"]
         caption = row["description"]
 
-        # Fix 1: use pre-computed embedding slice instead of re-encoding per caption
-        query_emb = embeddings[i:i+1]
-        results   = search_faiss(index, query_emb, uids, exclude_uid=uid, top_k=1)
-
-        retrieved_uid  = results[0][0] if results else None
-        retrieved_path = uid_to_step_path(retrieved_uid, dfs_step_dir) if retrieved_uid else None
-
-        output_step    = load_step_data_section(row["step_path"])
-        retrieved_step = load_step_data_section(retrieved_path) if retrieved_path else ""
-
-        # Fix 3: accumulate before the skip so metadata[i] always matches FAISS index position i
-        metadata.append({
-            "id_original": uid,
-            "caption":     caption,
-            "output":      output_step,
-        })
-
+        output_step = output_steps[uid]
         if not output_step:
             skipped += 1
             continue
+        if count_entities(output_step) >= max_entities:
+            skipped += 1
+            continue
+
+        # Retrieve from train-only index. exclude_uid still needed: a train
+        # row's nearest neighbour can be itself.
+        query_emb = embeddings[i:i+1]
+        results   = search_faiss(index, query_emb, train_uids, exclude_uid=uid, top_k=1)
+
+        retrieved_uid  = results[0][0] if results else None
+        retrieved_step = output_steps.get(retrieved_uid, "") if retrieved_uid else ""
+        if retrieved_step and count_entities(retrieved_step) >= max_entities:
+            retrieved_step = ""
 
         dataset.append({
             "id_original":       uid,
@@ -167,20 +243,21 @@ def main():
         if (i + 1) % 1000 == 0:
             logger.info(f"  {i+1}/{len(df)} processed (skipped={skipped})")
 
-    logger.info(f"Built {len(dataset)} records (skipped {skipped} with empty STEP output)")
+    logger.info(f"Built {len(dataset)} records (skipped {skipped} empty/oversized)")
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(dataset, f, indent=2)
     logger.info(f"Saved to {output_path}")
 
-    # Fix 3: persist FAISS index + metadata so rl_train.py retriever can load them
+    # ── Persist filtered train-only index (consumed by rl_train.py / evaluate.py) ──
+    persist_index = build_faiss_index(persist_embs)
     faiss_index_path    = cfg.paths.faiss_index_path
     faiss_metadata_path = cfg.paths.faiss_metadata_path
     os.makedirs(os.path.dirname(faiss_index_path), exist_ok=True)
-    faiss.write_index(index, faiss_index_path)
+    faiss.write_index(persist_index, faiss_index_path)
     with open(faiss_metadata_path, "wb") as fh:
         pickle.dump(metadata, fh)
-    logger.info(f"FAISS index saved to {faiss_index_path} ({len(metadata)} records)")
+    logger.info(f"FAISS index saved to {faiss_index_path} ({len(metadata)} filtered train records)")
 
 
 if __name__ == "__main__":

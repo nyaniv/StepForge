@@ -69,20 +69,29 @@ def main():
         else:
             unmatched.append(rec)
 
-    # Fall back: if predefined splits don't cover our UIDs (different version of dataset),
-    # do a deterministic 70/20/10 split so the script always produces output.
-    if not train and not val and not test:
-        logger.warning("No UIDs matched predefined splits — falling back to 70/20/10 random split")
-        import random
-        random.seed(42)
-        random.shuffle(data)
-        n = len(data)
-        train = data[:int(n * 0.7)]
-        test  = data[int(n * 0.7):int(n * 0.9)]
-        val   = data[int(n * 0.9):]
-        unmatched = []
+    # B3: fail hard instead of random-fallback. A reshuffle would leave each
+    # record's relavant_step_file (retrieved from a train-only index built by
+    # dataset_construct_rag.py) pointing at what is now test data.
+    if len(train) < 100:
+        raise RuntimeError(
+            f"Only {len(train)} records matched the train split (expected ~14k). "
+            f"UID format mismatch between rag_dataset.json and {cfg.paths.split_json}? "
+            f"unmatched={len(unmatched)}, val={len(val)}, test={len(test)}"
+        )
 
     logger.info(f"Split result — train: {len(train)}, val: {len(val)}, test: {len(test)}, unmatched: {len(unmatched)}")
+
+    # D3: write unmatched records so the user can inspect what was dropped.
+    if unmatched:
+        unmatched_path = os.path.join(out_dir, "unmatched.json")
+        with open(unmatched_path, "w") as f:
+            json.dump(unmatched, f, indent=2)
+        ratio = len(unmatched) / max(len(data), 1)
+        msg = f"{len(unmatched)} records ({ratio:.1%}) matched no predefined split → {unmatched_path}"
+        if ratio > 0.05:
+            logger.warning(msg + " — paper §4.1 reports 14,396 train pairs; check your split JSON.")
+        else:
+            logger.info(msg)
 
     for name, subset in [("train", train), ("val", val), ("test", test)]:
         path = os.path.join(out_dir, f"{name}.json")

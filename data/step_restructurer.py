@@ -14,18 +14,47 @@ Run restore_step_valid.py afterwards to strip annotations and produce a valid ST
 Usage:
     python step_restructurer.py <step_file_path> [-o <output_directory>]
 
-Pipeline:
-    1. round_step_numbers.py   — normalise floating-point precision in raw STEP files
-    2. step_restructurer.py    — DFS reorder + annotate (produces training-format STEP)
-    3. restore_step_valid.py   — strip annotations → valid STEP file
-    4. dataset_construct_rag.py — build RAG training dataset (pairs each STEP with retrieval)
+Pipeline (ACTIVE — matches what llama3_SFT_response.py / rl_train.py consume):
+    1. batch_restructure.py    — drives this file over the dataset
+    2. step_restructurer.py    — DFS reorder + annotate (this file)
+    3. round_step_numbers.py   — normalise floating-point precision
+    4. dataset_construct_rag.py — build RAG training dataset
     5. data_split.py            — split into train / val / test
+    (build_dataset.py is the LEGACY pipeline; see its docstring warning)
 """
 
 import re
 import os
 import sys
 import argparse
+
+# C9: STEP string literals can contain '#42'. Mask before findall(r'#(\d+)').
+_STR_LIT_RE = re.compile(r"'(?:[^']|'')*'")
+
+
+def _mask_string_literals(text: str) -> str:
+    return _STR_LIT_RE.sub(lambda m: "_" * len(m.group()), text)
+
+
+def _sub_outside_strings(pattern, repl, text: str) -> str:
+    """
+    Apply re.sub(pattern, repl, ...) only to spans OUTSIDE STEP string literals.
+    Same C9 principle as _mask_string_literals but for substitution.
+    """
+    out, last = [], 0
+    for sm in _STR_LIT_RE.finditer(text):
+        out.append(re.sub(pattern, repl, text[last:sm.start()]))
+        out.append(sm.group(0))
+        last = sm.end()
+    out.append(re.sub(pattern, repl, text[last:]))
+    return "".join(out)
+
+
+# W10: same problem for ';' inside string literals — '#1=PRODUCT('Part; v2',...);'
+# breaks the [^;]* simple-entity regex. Mask first, parse the masked copy for
+# spans, then read the real text from the unmasked original.
+def _mask_for_match(text: str) -> str:
+    return _STR_LIT_RE.sub(lambda m: "'" + "_" * (len(m.group()) - 2) + "'", text)
 from pathlib import Path
 from collections import defaultdict, deque
 from typing import Dict, List, Set, Tuple, Optional
@@ -105,10 +134,19 @@ class StepRestructurer:
                 if complex_match:
                     entity_id = int(complex_match.group(1))
                     self.complex_entities[entity_id] = line.strip()
+                else:
+                    # Detector regex matched but parser regex failed — file is
+                    # malformed (unbalanced parens or no terminating ;). Surface
+                    # so batch_restructure can exclude it instead of silently
+                    # dropping the entity and producing dangling refs downstream.
+                    raise ValueError(f"complex entity detector matched but parser failed: {line[:120]!r}")
                 continue
 
-            # Extract entity ID and type for simple entities
-            entity_match = re.search(r'#(\d+)\s*=\s*([A-Z_][A-Z0-9_]*)\s*\([^;]*\)\s*;', line)
+            # Extract entity ID and type for simple entities.
+            # W10: match against a string-literal-masked copy so ';' inside a
+            # quoted name (PRODUCT('Part; v2',...)) doesn't break the parse.
+            masked_line = _mask_for_match(line)
+            entity_match = re.search(r'#(\d+)\s*=\s*([A-Z_][A-Z0-9_]*)\s*\([^;]*\)\s*;', masked_line)
             if entity_match:
                 entity_id = int(entity_match.group(1))
                 entity_type = entity_match.group(2)
@@ -122,7 +160,7 @@ class StepRestructurer:
             param_section_match = re.search(r'=\s*[A-Z_][A-Z0-9_]*\s*\((.+)\)\s*;', entity_content, re.DOTALL)
             if param_section_match:
                 param_section = param_section_match.group(1)
-                references = re.findall(r'#(\d+)', param_section)
+                references = re.findall(r'#(\d+)', _mask_string_literals(param_section))
 
                 valid_references = []
                 for ref_id_str in references:
@@ -133,9 +171,13 @@ class StepRestructurer:
 
                 self.entity_references[entity_id] = valid_references
 
-        # Third pass: analyze references from complex entities
+        # Third pass: analyze references from complex entities.
+        # N3: precompute ref-sets once per complex entity (was O(n²) re.findall
+        # in find_root_entities). Also feeds dfs_traverse_tree.
+        self._complex_ref_sets: dict[int, set[int]] = {}
         for complex_id, complex_content in self.complex_entities.items():
-            references = re.findall(r'#(\d+)', complex_content)
+            references = re.findall(r'#(\d+)', _mask_string_literals(complex_content))
+            self._complex_ref_sets[complex_id] = {int(r) for r in references} - {complex_id}
             for ref_id_str in references:
                 ref_id = int(ref_id_str)
                 if (ref_id in self.entity_map or ref_id in self.complex_entities) and ref_id != complex_id:
@@ -163,14 +205,15 @@ class StepRestructurer:
                     is_referenced = True
                     break
 
-            # Check if any complex entity references this complex entity
+            # Check if any complex entity references this complex entity.
+            # N3: use the precomputed ref-set instead of re.findall per pair.
             if not is_referenced:
-                for other_complex_id, complex_content in self.complex_entities.items():
-                    if other_complex_id != complex_id:
-                        references = re.findall(r'#(\d+)', complex_content)
-                        if str(complex_id) in references:
-                            is_referenced = True
-                            break
+                for other_complex_id in self.complex_entities:
+                    if other_complex_id == complex_id:
+                        continue
+                    if complex_id in self._complex_ref_sets.get(other_complex_id, ()):
+                        is_referenced = True
+                        break
 
             if not is_referenced:
                 complex_roots.append(complex_id)
@@ -208,34 +251,44 @@ class StepRestructurer:
 
         return unexpected_roots
 
-    def dfs_traverse_tree(self, start_entity_id, visited_in_path=None, depth=0):
-        """Perform DFS traversal and return the tree structure."""
-        if visited_in_path is None:
-            visited_in_path = set()
+    def dfs_traverse_tree(self, start_entity_id, visited=None, depth=0, _path=None):
+        """
+        Perform DFS traversal and return the tree structure.
 
-        if start_entity_id in visited_in_path:
+        Paper §3.1: "strategic pruning, each ref relationship appears once."
+        `visited` is a SHARED set across the whole traversal (mutated in place),
+        so a CARTESIAN_POINT referenced by 50 faces is emitted once, not 50 times.
+        `_path` tracks only the current root→leaf chain for cycle detection.
+        """
+        if visited is None:
+            visited = set()
+        if _path is None:
+            _path = set()
+
+        if start_entity_id in _path:
             return [(depth, start_entity_id, "CIRCULAR_REF")]
+        if start_entity_id in visited:
+            return []
 
         tree = [(depth, start_entity_id, "NORMAL")]
-        visited_in_path.add(start_entity_id)
+        visited.add(start_entity_id)
+        _path.add(start_entity_id)
 
         # Get references
         if start_entity_id in self.entity_map:
             references = self.entity_references.get(start_entity_id, [])
         elif start_entity_id in self.complex_entities:
-            complex_content = self.complex_entities[start_entity_id]
-            ref_ids = re.findall(r'#(\d+)', complex_content)
-            references = [int(r) for r in ref_ids if int(r) != start_entity_id]
+            references = sorted(self._complex_ref_sets.get(start_entity_id, set()))
         else:
             references = []
 
-        # Recursively traverse references
+        # Recursively traverse references — same shared visited set
         for ref_id in references:
             if ref_id in self.entity_map or ref_id in self.complex_entities:
-                subtree = self.dfs_traverse_tree(ref_id, visited_in_path.copy(), depth + 1)
+                subtree = self.dfs_traverse_tree(ref_id, visited, depth + 1, _path)
                 tree.extend(subtree)
 
-        visited_in_path.discard(start_entity_id)
+        _path.discard(start_entity_id)
         return tree
 
     def merge_trees_by_depth(self, trees):
@@ -379,9 +432,15 @@ class StepRestructurer:
 
     def apply_color_replacements(self, content, color_replacements):
         """Replace color entity references in content."""
-        for old_id, new_id in color_replacements.items():
-            content = re.sub(rf'#{old_id}\b', f'#{new_id}', content)
-        return content
+        if not color_replacements:
+            return content
+        # Single-pass: a sequential loop can re-match its own output when
+        # old_id A maps to new_id B and B is itself a key (A→B→C chain).
+        ids_pattern = "|".join(str(k) for k in color_replacements)
+        def _repl(m):
+            old = int(m.group(1))
+            return f"#{color_replacements.get(old, old)}"
+        return _sub_outside_strings(rf'#({ids_pattern})\b', _repl, content)
 
     def remove_duplicate_entities_in_tree(self, tree):
         """Remove duplicate entities in a tree."""
@@ -731,17 +790,21 @@ class StepRestructurer:
                     id_mapping[old_id] = next_id
                     next_id += 1
 
-        # Second pass: apply mapping to all occurrences of #<id> tokens
+        # Second pass: apply mapping to all occurrences of #<id> tokens.
+        # Hard KeyError on unmapped ref (mirrors dfs_reserializer.py:95) — silent
+        # pass-through emits old #N which may collide with a different entity's
+        # new ID after renumbering. Prune branches must not strand referenced
+        # entities; if they do, the file is excluded rather than corrupted.
         token_pattern = re.compile(r'#(\d+)\b')
         def replace_token(m):
             old = int(m.group(1))
-            if old in id_mapping:
-                return f"#{id_mapping[old]}"
-            return m.group(0)
+            return f"#{id_mapping[old]}"
 
         renumbered_sections: List[str] = []
         for line in self.output_sections:
-            renumbered_sections.append(token_pattern.sub(replace_token, line))
+            # Only renumber outside string literals — PRODUCT('Part #42 rev B')
+            # must not become PRODUCT('Part #{new_id} rev B').
+            renumbered_sections.append(_sub_outside_strings(token_pattern, replace_token, line))
         # Save mapping for later placeholder processing
         self._last_id_mapping = id_mapping
 
@@ -804,7 +867,7 @@ class StepRestructurer:
                             if nid in placeholders:
                                 return f"#{placeholders[nid]}"
                             return mtok.group(0)
-                        line = re.sub(r'#(\d+)\b', repl_token, line)
+                        line = _sub_outside_strings(r'#(\d+)\b', repl_token, line)
                         updated.append(line)
                         continue
             updated.append(line)
@@ -833,7 +896,6 @@ class StepRestructurer:
                 if pending_keys:
                     # Pop first placeholder mapping and insert annotation
                     new_id, key = pending_keys.pop(0)
-                    old_id = new_to_old.get(new_id, None)
                     result.append(f"/* {key} = {new_id} */")
 
         return result

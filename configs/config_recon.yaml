@@ -1,0 +1,90 @@
+# Recon config — minimal end-to-end smoke test on Gautschi
+#
+# PURPOSE: Validate that every code path the static reviews ASSUMED works
+#   actually works on the real cluster, before committing to the full run.
+#   This config is intentionally tiny: 1 SFT epoch, 5 RL steps.
+#
+# WHAT IT VALIDATES (that no static review can):
+#   - open3d/OCC/faiss import on the cluster's actual GLIBC
+#   - torchrun sets LOCAL_RANK and the rank-0 barriers fire
+#   - The reward subprocess produces frac_ok > 0 on real model output
+#   - Checkpoints write and auto-resume reads them
+#   - metrics.jsonl + tensorboard events appear where expected
+#
+# EXPECTED WALL-CLOCK (rough):
+#   SFT recon  (1 epoch, ~200 samples):        ~10-20 min on 1×H100
+#   RL recon   (5 steps, 4 generations/prompt): ~10-15 min on 8×H100
+#   Total GPU-hours: ~2-3, well under $20 at typical H100 rates.
+#
+# HOW TO USE:
+#   1. Build a SMALL dataset (limit at the restructure step):
+#        python data/export_steps.py            --config configs/config_recon.yaml
+#        python data/batch_restructure.py       --config configs/config_recon.yaml --limit 200
+#        python data/dataset_construct_rag.py   --config configs/config_recon.yaml
+#        python data/data_split.py              --config configs/config_recon.yaml
+#   2. Edit slurm_sft_gautschi.sh and slurm_rl_gautschi.sh:
+#        change `--config configs/config_gautschi.yaml`
+#        to     `--config configs/config_recon.yaml`
+#      (the scripts hardcode the config path; this is a temporary edit)
+#   3. sbatch slurm_sft_gautschi.sh   → wait → sbatch slurm_rl_gautschi.sh
+#   4. Restore the slurm scripts to config_gautschi.yaml for the real run.
+#
+# Paths are SEPARATE from the full-run paths so the recon's tiny dataset
+# and checkpoints can't be picked up by a later full run.
+
+paths:
+  cad_seq_dir:           ${oc.env:SCRATCH}/data/cad_seq
+  caption_csv:           ${oc.env:SCRATCH}/data/text2cad_v1.1/text2cad_v1.1.csv
+  split_json:            ${oc.env:SCRATCH}/data/text2cad_v1.1/train_test_val.json
+  text2cad_src:          ${oc.env:SCRATCH}/data/Text2CAD/CadSeqProc
+  step_output_dir:       ${oc.env:SCRATCH}/stepforge_recon/processed/step_files
+  processed_dir:         ${oc.env:SCRATCH}/stepforge_recon/processed
+  faiss_index_path:      ${oc.env:SCRATCH}/stepforge_recon/retrieval/caption_index.faiss
+  faiss_metadata_path:   ${oc.env:SCRATCH}/stepforge_recon/retrieval/metadata.pkl
+  sft_checkpoint_dir:    ${oc.env:SCRATCH}/stepforge_recon/checkpoints/sft
+  rl_checkpoint_dir:     ${oc.env:SCRATCH}/stepforge_recon/checkpoints/rl
+
+data:
+  max_entities: 500
+  caption_column: "abstract"
+
+model:
+  base_model: "meta-llama/Llama-3.2-3B-Instruct"
+  max_seq_length: 16384
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+  use_quantization: false
+  max_retrieved_tokens: 10000
+
+sft:
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  num_epochs: 1                    # RECON: 1 epoch (paper: 10)
+  warmup_ratio: 0.05
+  optim: "adamw_8bit"
+
+rl:
+  num_generations: 4               # RECON: 4 (paper: 8) — still tests GRPO grouping, halves rollout time
+  kl_coef: 0.02
+  entropy_coef: 0.005
+  learning_rate: 3.0e-6
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  max_steps: 5                     # RECON: 5 (paper: 80)
+  max_completion_length: 8192
+  use_reward_shaping: false
+  save_steps: 2                    # RECON: checkpoint at steps 2 and 4 → tests write+resume path
+  kl_halt_threshold: 1.0
+  reward:
+    delta_low: 0.01
+    delta_high: 0.5
+    n_sample_points: 2000
+    chamfer_bidirectional: true
+    scale_prenorm: true
+    mesh_deflection: null
+
+retrieval:
+  model: "all-MiniLM-L6-v2"
+  top_k: 1

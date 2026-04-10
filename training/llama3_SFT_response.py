@@ -28,17 +28,17 @@ if "HF_HOME" not in os.environ:
     _vol = os.environ.get("VOLUME", "/runpod-volume")
     os.environ["HF_HOME"] = os.path.join(_vol, ".hf-cache")
 
-import argparse as _argparse
+import argparse
 from omegaconf import OmegaConf
 
-_ap = _argparse.ArgumentParser(add_help=False)
-_ap.add_argument("--config", default=None, help="Path to config YAML (default: configs/config_runpod.yaml)")
-_args, _ = _ap.parse_known_args()
-_default_config = _args.config or os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "configs", "config_runpod.yaml",
+_parser = argparse.ArgumentParser(description="STEP-LLM SFT (Unsloth)")
+_parser.add_argument("--config", default="configs/config_runpod.yaml",
+                     help="Config YAML. NB: config_runpod.yaml previously had num_epochs=1 (smoke test); now matches paper.")
+_args, _ = _parser.parse_known_args()
+_cfg_path = _args.config if os.path.isabs(_args.config) else os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), _args.config
 )
-_cfg = OmegaConf.load(_default_config)
+_cfg = OmegaConf.load(_cfg_path)
 
 BASE_MODEL_PATH = _cfg.model.base_model                           # meta-llama/Llama-3.2-3B-Instruct
 TRAIN_JSON      = os.path.join(_cfg.paths.processed_dir, "train.json")
@@ -72,10 +72,14 @@ max_seq_length = _cfg.model.max_seq_length  # RoPE Scaling is handled automatica
 # DFS ordering front-loads root structure (shell, faces, axes) so the first ~35 entities
 # (~500 tokens) carry the bulk of useful structural signal; trailing entities are mostly
 # repeated CARTESIAN_POINT coordinates specific to the retrieved shape.
-# 500 tokens is a deliberate cost-saving choice. The paper does not truncate retrieved
-# context — increasing MAX_RETRIEVED_TOKENS improves RAG fidelity at the cost of
-# proportionally less room for the GT STEP output within max_seq_length.
-MAX_RETRIEVED_TOKENS = int(getattr(_cfg.model, "max_retrieved_tokens", 500))  # configurable; Gautschi sets 4096 (paper-faithful)
+# W1: The paper does NOT truncate retrieved context (§3.2). 4500 covers a
+# typical ~265-entity retrieval. Override via cfg.sft.max_retrieved_tokens
+# (or cfg.model.max_retrieved_tokens — upstream gautschi config uses this key).
+MAX_RETRIEVED_TOKENS = int(
+    _cfg.sft.get("max_retrieved_tokens", None)
+    or getattr(_cfg.model, "max_retrieved_tokens", None)
+    or 4500
+)
 dtype = None            # None = auto-detect (bfloat16 on Ampere+, float16 on older GPUs)
 load_in_4bit = False    # Set True to use 4-bit quantisation (reduces VRAM, slight quality loss)
 
@@ -227,8 +231,27 @@ from datasets import Dataset
 
 _FORMATTED_TRAIN = os.path.join(OUTPUT_DIR, "formatted_train")
 _FORMATTED_TEST  = os.path.join(OUTPUT_DIR, "formatted_test")
+_CACHE_KEY_PATH  = os.path.join(OUTPUT_DIR, ".formatted_cache_key")
 
-if os.path.exists(_FORMATTED_TRAIN) and os.path.exists(_FORMATTED_TEST):
+def _compute_cache_key() -> str:
+    import hashlib
+    parts = []
+    for p in (TRAIN_JSON, TEST_JSON):
+        try:
+            parts.append(f"{p}:{os.path.getmtime(p)}:{os.path.getsize(p)}")
+        except OSError:
+            parts.append(f"{p}:missing")
+    parts.append(f"max_seq={max_seq_length}")
+    parts.append(f"max_ret={MAX_RETRIEVED_TOKENS}")
+    parts.append(f"rag={USE_RAG}")
+    parts.append(f"model={BASE_MODEL_PATH}")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+_current_key = _compute_cache_key()
+_stored_key  = open(_CACHE_KEY_PATH).read().strip() if os.path.exists(_CACHE_KEY_PATH) else ""
+
+if (os.path.exists(_FORMATTED_TRAIN) and os.path.exists(_FORMATTED_TEST)
+        and _stored_key == _current_key):
     logger.info(f"Loading pre-formatted datasets from disk (skipping map)...")
     dataset      = Dataset.load_from_disk(_FORMATTED_TRAIN)
     test_dataset = Dataset.load_from_disk(_FORMATTED_TEST)
@@ -265,6 +288,8 @@ else:
     logger.info("Saving formatted datasets to disk for future runs...")
     dataset.save_to_disk(_FORMATTED_TRAIN)
     test_dataset.save_to_disk(_FORMATTED_TEST)
+    with open(_CACHE_KEY_PATH, "w") as f:
+        f.write(_current_key)
     logger.info(f"  Saved to {_FORMATTED_TRAIN} and {_FORMATTED_TEST}")
 
 logger.info(f"Final train size: {len(dataset)}  |  test size: {len(test_dataset)}")
@@ -303,6 +328,8 @@ class VerboseEpochCallback(TrainerCallback):
             self._step_losses.append(loss)
             if math.isnan(loss) or math.isinf(loss):
                 logger.error(f"[step {state.global_step}] NaN/Inf loss detected! loss={loss}  lr={lr}  grad_norm={grad_norm}")
+                logger.error("Halting training — continuing past NaN poisons all subsequent steps")
+                control.should_training_stop = True
             elif loss == 0.0:
                 self._all_masked_count += 1
                 logger.warning(
@@ -369,6 +396,25 @@ from trl import SFTTrainer
 from transformers import TrainingArguments, DataCollatorForSeq2Seq
 from unsloth import is_bfloat16_supported
 
+import wandb
+_run_name = os.environ.get("WANDB_RUN_NAME", "sft")
+wandb.init(
+    project=os.environ.get("WANDB_PROJECT", "stepforge"),
+    name=_run_name,
+    config={
+        "base_model": BASE_MODEL_PATH,
+        "max_seq_length": max_seq_length,
+        "lora_r": _cfg.model.lora_r,
+        "lora_alpha": _cfg.model.lora_alpha,
+        "epochs": _cfg.sft.num_epochs,
+        "lr": _cfg.sft.learning_rate,
+        "batch": _cfg.sft.per_device_train_batch_size,
+        "grad_accum": _cfg.sft.gradient_accumulation_steps,
+        "max_retrieved_tokens": MAX_RETRIEVED_TOKENS,
+        "variant": "refined",
+    },
+)
+
 logger.info("Building SFTTrainer...")
 logger.info(f"  epochs={_cfg.sft.num_epochs}  lr={_cfg.sft.learning_rate}  "
             f"batch={_cfg.sft.per_device_train_batch_size}  grad_accum={_cfg.sft.gradient_accumulation_steps}")
@@ -397,9 +443,11 @@ trainer = SFTTrainer(
         lr_scheduler_type="linear",
         seed=3407,
         output_dir=OUTPUT_DIR,
-        report_to="none",       # set to "wandb" for experiment tracking
-        save_strategy="steps",
-        save_steps=300,
+        report_to="wandb",
+        # Paper §4.1: "save a checkpoint after each epoch and perform
+        # asynchronous validation".
+        save_strategy="epoch",
+        eval_strategy="epoch",
     ),
     callbacks=[VerboseEpochCallback()],
 )
@@ -446,7 +494,20 @@ else:
 
 logger.info("Starting SFT training...")
 _train_start = time.time()
-trainer_stats = trainer.train()
+# CR-1: auto-resume from the latest checkpoint-N if one exists. Without this,
+# a wall-clock kill or preemption restarts from epoch 0 even though per-epoch
+# checkpoints (with full optimizer/scheduler/RNG state) are already on disk.
+import glob as _glob
+_ckpts = sorted(
+    _glob.glob(os.path.join(OUTPUT_DIR, "checkpoint-*")),
+    key=lambda p: int(p.rsplit("-", 1)[-1]) if p.rsplit("-", 1)[-1].isdigit() else -1,
+)
+_resume_from = _ckpts[-1] if _ckpts else None
+if _resume_from:
+    logger.info(f"CR-1: resuming from {_resume_from}")
+else:
+    logger.info("CR-1: no existing checkpoint — starting from scratch")
+trainer_stats = trainer.train(resume_from_checkpoint=_resume_from)
 _train_total = time.time() - _train_start
 
 logger.info(f"Training complete in {_train_total/3600:.2f}h")

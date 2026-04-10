@@ -54,6 +54,12 @@ export KMP_DUPLICATE_LIB_OK=TRUE
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# ── WandB ─────────────────────────────────────────────────────────────────────
+export WANDB_PROJECT="stepforge"
+export WANDB_RUN_NAME="rl-${SLURM_JOB_ID}"    # unique name per job for side-by-side comparison
+# WANDB_API_KEY must be set in your environment before submitting, or run `wandb login` first
+export WANDB_API_KEY="${WANDB_API_KEY:?Set WANDB_API_KEY or run: wandb login}"
+
 # NCCL tuning for H100 NVLink interconnect
 export NCCL_DEBUG=WARN
 export NCCL_IB_DISABLE=0            # keep InfiniBand enabled if available

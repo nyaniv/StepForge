@@ -34,6 +34,21 @@ import argparse
 from pathlib import Path
 from typing import Union, List
 
+# STEP string literals: single-quoted, '' is the escaped quote.
+_STR_LIT_RE = re.compile(r"'(?:[^']|'')*'")
+
+
+def _sub_outside_strings(pattern, repl, text: str) -> str:
+    """Apply re.sub only to spans outside STEP string literals."""
+    out, last = [], 0
+    for sm in _STR_LIT_RE.finditer(text):
+        out.append(re.sub(pattern, repl, text[last:sm.start()]))
+        out.append(sm.group(0))
+        last = sm.end()
+    out.append(re.sub(pattern, repl, text[last:]))
+    return "".join(out)
+
+
 def round_float_numbers(content: str) -> str:
     """
     Round floating-point numbers in STEP file content to 6 decimal places.
@@ -51,48 +66,35 @@ def round_float_numbers(content: str) -> str:
     # - Numbers in parentheses: ( 0.123456789, -0.456789 )
     # - Numbers with trailing zeros: 0.123456789000000
     
-    # This regex matches floating-point numbers but excludes entity numbers (#123)
-    float_pattern = r'\b(-?\d+\.\d+E?[+-]?\d*)\b'
+    # ISO 10303-21 §6.4.3 REAL literals: optional sign, digits, '.', optional
+    # fractional digits, optional exponent (E or e). Forms: 1.5, 1., .5, 1.5E-3.
+    # No \b — '.' breaks word-boundary semantics on the trailing-dot form.
+    float_pattern = r'-?(?:\d+\.\d*|\.\d+)(?:[Ee][+-]?\d+)?'
     
     def round_match(match):
-        number_str = match.group(1)
-        
-        # Skip if this looks like an entity number (starts with #)
-        if match.start() > 0 and content[match.start()-1] == '#':
+        number_str = match.group(0)
+
+        # Skip entity refs like #123. match.string is the segment this regex
+        # is currently running over (per re.sub semantics) — match.start() is
+        # relative to that segment, not the outer `content`.
+        if match.start() > 0 and match.string[match.start()-1] == '#':
             return number_str
-        
+
         try:
-            # Check if it's scientific notation
             if 'E' in number_str or 'e' in number_str:
-                # Split into mantissa and exponent
-                if 'E' in number_str:
-                    mantissa, exponent = number_str.split('E', 1)
-                else:
-                    mantissa, exponent = number_str.split('e', 1)
-                
-                # Round the mantissa to 6 decimal places
-                mantissa_float = float(mantissa)
-                rounded_mantissa = round(mantissa_float, 6)
-                
-                # Format mantissa to exactly 6 decimal places
-                formatted_mantissa = f"{rounded_mantissa:.6f}"
-                
-                # Reconstruct the scientific notation
-                return f"{formatted_mantissa}E{exponent}"
+                norm = number_str.replace('e', 'E')
+                mantissa, exponent = norm.split('E', 1)
+                rounded_mantissa = round(float(mantissa), 6)
+                return f"{rounded_mantissa:.6f}E{exponent}"
             else:
-                # Regular decimal - parse and round
-                number = float(number_str)
-                rounded = round(number, 6)
-                
-                # Format to exactly 6 decimal places
+                rounded = round(float(number_str), 6)
                 return f"{rounded:.6f}"
-                
         except ValueError:
-            # If we can't parse it as a float, return unchanged
             return number_str
     
-    # Apply the rounding to the content
-    return re.sub(float_pattern, round_match, content)
+    # Apply rounding only outside string literals — PRODUCT('Version 2.1234567')
+    # is metadata, not geometry; rounding it would corrupt the part name.
+    return _sub_outside_strings(float_pattern, round_match, content)
 
 def process_single_step_file(input_path: str, output_dir: str) -> None:
     """

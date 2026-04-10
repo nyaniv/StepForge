@@ -32,7 +32,8 @@ from omegaconf import OmegaConf
 
 # ── Prompt helpers (identical to SFT training) ────────────────────────────────
 
-MAX_RETRIEVED_TOKENS = 500  # must match llama3_SFT_response.py — cost-saving truncation, see comment there
+# W1: Paper does NOT truncate retrieved context (§3.2). Match training default.
+MAX_RETRIEVED_TOKENS = 4500
 
 ABC_PROMPT_RAG = (
     "You are a CAD model generation assistant trained to produce STEP (.step) files "
@@ -43,9 +44,11 @@ ABC_PROMPT_RAG = (
 
 
 def format_prompt(caption: str, retrieved_step: str, tokenizer=None) -> str:
-    if tokenizer is not None:
+    # Only round-trip through the tokenizer when we actually need to truncate.
+    if tokenizer is not None and len(retrieved_step) > MAX_RETRIEVED_TOKENS * 5:
         ids = tokenizer(retrieved_step, add_special_tokens=False)["input_ids"]
-        retrieved_step = tokenizer.decode(ids[:MAX_RETRIEVED_TOKENS])
+        if len(ids) > MAX_RETRIEVED_TOKENS:
+            retrieved_step = tokenizer.decode(ids[:MAX_RETRIEVED_TOKENS])
     return ABC_PROMPT_RAG.format(caption, retrieved_step)
 
 
@@ -69,13 +72,19 @@ def generate_step(
     retriever,
     max_new_tokens: int = 2048,
     temperature: float = 0.3,
+    exclude_uid: str | None = None,
 ) -> str:
     """
     Generate a STEP file for the given caption using live RAG retrieval.
 
+    Args:
+        exclude_uid: pass the test record's UID at evaluation time. Without
+            this, a test caption can retrieve itself if a non-train-only
+            index ever ends up at faiss_index_path.
+
     Returns the extracted STEP content string.
     """
-    retrieved = retriever.retrieve(caption)  # live retrieval at inference
+    retrieved = retriever.retrieve(caption, exclude_uid=exclude_uid)
     retrieved_step = retrieved.get("output") or retrieved.get("step") or ""
     prompt = format_prompt(caption, retrieved_step, tokenizer)
 
@@ -87,7 +96,12 @@ def generate_step(
         do_sample=True,
         pad_token_id=tokenizer.eos_token_id,
     )
-    text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+    # F0: HF causal LM generate() returns prompt+completion. The retrieved STEP
+    # in the prompt also contains DATA;...END-ISO-10303-21; — extract_step()'s
+    # leftmost-matching regex would return THAT instead of the model's output.
+    # Slice the prompt off so extract_step only sees the completion.
+    prompt_len = inputs["input_ids"].shape[1]
+    text = tokenizer.decode(output_ids[0][prompt_len:], skip_special_tokens=True)
     return extract_step(text)
 
 

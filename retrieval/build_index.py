@@ -37,12 +37,22 @@ def build_index(train_jsonl: str, index_path: str, metadata_path: str,
 
     Uses IndexFlatIP on L2-normalized embeddings = exact cosine similarity search.
     """
+    # M2: Active pipeline (dataset_construct_rag.py → data_split.py) writes
+    # train.json (a JSON array). Only the inactive filter_dataset.py writes
+    # JSONL. Support both so this script doesn't FileNotFoundError.
     logger.info(f"Loading training data from {train_jsonl}")
     with open(train_jsonl) as f:
-        records = [json.loads(l) for l in f]
+        head = f.read(1); f.seek(0)
+        if head == "[":
+            records = json.load(f)
+        else:
+            records = [json.loads(l) for l in f if l.strip()]
     captions = [r["caption"] for r in records]
     logger.info(f"Embedding {len(captions)} captions with {model_name}")
 
+    # S3: cuBLAS determinism for bitwise-reproducible embeddings across runs.
+    # Without this, near-tie captions can flip top-1 retrieval between runs.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     model = SentenceTransformer(model_name)
     embeddings = model.encode(
         captions,
@@ -68,10 +78,28 @@ def build_index(train_jsonl: str, index_path: str, metadata_path: str,
 def main():
     parser = argparse.ArgumentParser(description="Build FAISS caption index for RAG")
     parser.add_argument("--config", default="configs/config.yaml")
+    parser.add_argument("--force", action="store_true",
+                        help="Overwrite existing index. Without this, refuses if "
+                             "an index already exists (D2: dataset_construct_rag.py "
+                             "writes a FILTERED index to the same path).")
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
-    train_jsonl = f"{cfg.paths.processed_dir}/train.jsonl"
+
+    # D2: dataset_construct_rag.py writes a filtered train-only index to the
+    # same cfg.paths.faiss_index_path. Running this script afterwards would
+    # silently overwrite it with an UNFILTERED index. Refuse without --force.
+    if os.path.exists(cfg.paths.faiss_index_path) and not args.force:
+        sys.exit(
+            f"Index already exists at {cfg.paths.faiss_index_path}.\n"
+            f"This was likely written by dataset_construct_rag.py (the active pipeline).\n"
+            f"Rerun with --force to overwrite, or skip this script."
+        )
+
+    # M2: prefer active-pipeline output (train.json), fall back to JSONL.
+    train_jsonl = os.path.join(cfg.paths.processed_dir, "train.json")
+    if not os.path.exists(train_jsonl):
+        train_jsonl = os.path.join(cfg.paths.processed_dir, "train.jsonl")
 
     build_index(
         train_jsonl=train_jsonl,

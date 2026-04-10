@@ -36,6 +36,22 @@ class Retriever:
         self.index = faiss.read_index(index_path)
         with open(metadata_path, "rb") as fh:
             self.records = pickle.load(fh)
+        # S4: two scripts write to the same paths with different row populations.
+        # A size mismatch means retrieval silently returns the wrong record.
+        if self.index.ntotal != len(self.records):
+            raise RuntimeError(
+                f"FAISS index/metadata size mismatch: {self.index.ntotal} vectors "
+                f"vs {len(self.records)} records. Rebuild both together."
+            )
+        # W7: paper §3.2 specifies cosine similarity (IndexFlatIP on normalized
+        # vectors). An L2 index gives identical rankings on normalized vectors
+        # but only by coincidence; warn so the dependency is explicit.
+        if not isinstance(self.index, faiss.IndexFlatIP):
+            logger.warning(
+                f"FAISS index type is {type(self.index).__name__}, expected "
+                f"IndexFlatIP. Rankings are equivalent only if all embeddings "
+                f"(including queries) are L2-normalized."
+            )
         self.model = SentenceTransformer(model_name, device=device)
         logger.info(f"Retriever ready: {len(self.records)} training examples indexed")
 
@@ -55,8 +71,10 @@ class Retriever:
             normalize_embeddings=True,
         ).astype(np.float32)
 
-        # Search top-20 to allow filtering out self
-        _, indices = self.index.search(emb, 20)
+        # N2: top-2 suffices for self-exclusion (UIDs are unique, self appears
+        # at most once). Was 20 — IndexFlat is exact brute-force regardless,
+        # but matching dataset_construct_rag.py keeps the two paths aligned.
+        _, indices = self.index.search(emb, 2)
 
         for idx in indices[0]:
             rec = self.records[int(idx)]
@@ -79,7 +97,7 @@ class Retriever:
             show_progress_bar=False,
         ).astype(np.float32)
 
-        _, indices = self.index.search(embeddings, 20)
+        _, indices = self.index.search(embeddings, 2)
         results = []
         for i, query_indices in enumerate(indices):
             exclude = exclude_uids[i] if exclude_uids and i < len(exclude_uids) else None
