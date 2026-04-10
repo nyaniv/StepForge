@@ -28,7 +28,10 @@ import multiprocessing as mp
 # Must be set before any CUDA or torch import.  compute_reward() spawns
 # subprocesses for OCP tessellation; forking after CUDA init corrupts GPU
 # handles in the child and causes non-deterministic hangs.
-mp.set_start_method("spawn", force=True)
+try:
+    mp.set_start_method("spawn", force=True)
+except RuntimeError:
+    pass  # already set (torchrun spawns worker processes before script entry)
 
 import argparse
 import glob
@@ -68,7 +71,7 @@ ABC_PROMPT_RAG = (
     "\n\n\n### caption:\n{}\n\n### retrieved relevant step file:\n{}\n\n### output:\n"
 )
 
-MAX_RETRIEVED_TOKENS = 500  # must match llama3_SFT_response.py — cost-saving truncation, see comment there
+MAX_RETRIEVED_TOKENS: int = 500  # overridden per-config below in main(); default matches RunPod/local configs
 
 
 def format_prompt(caption: str, retrieved_step: str, tokenizer) -> str:
@@ -189,6 +192,16 @@ def main():
 
     cfg = OmegaConf.load(args.config)
 
+    # ── Apply config-driven globals ──────────────────────────────────────────
+    global MAX_RETRIEVED_TOKENS
+    MAX_RETRIEVED_TOKENS = int(getattr(cfg.model, "max_retrieved_tokens", 500))
+
+    # ── Distributed context (set by torchrun on Gautschi) ───────────────────
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    is_distributed = world_size > 1
+    use_quantization = bool(getattr(cfg.model, "use_quantization", True))
+
     # ── File logging ─────────────────────────────────────────────────────────
     os.makedirs(cfg.paths.rl_checkpoint_dir, exist_ok=True)
     _log_path = os.path.join(cfg.paths.rl_checkpoint_dir, "rl_train.log")
@@ -212,22 +225,50 @@ def main():
         )
 
     # ── Load SFT model (cold-start for RL) ──────────────────────────────────
-    # Use standard transformers + bitsandbytes instead of Unsloth to avoid
-    # Unsloth's fast_forward_inference shape mismatch during GRPO generation.
+    # Two paths:
+    #   A) Gautschi / multi-GPU / no-quantization:
+    #      Load in bf16 with device_map per local rank. 3B model = ~6 GB in bf16,
+    #      well within H100 80 GB. Use FlashAttention-2 for long-context efficiency.
+    #   B) Single-GPU / quantized (RunPod A100, local):
+    #      4-bit BnB quantization + device_map="auto" (original path).
     logger.info(f"Loading SFT checkpoint from {sft_checkpoint}...")
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
-    )
-    base_model = AutoModelForCausalLM.from_pretrained(
-        cfg.model.base_model,
-        quantization_config=bnb_config,
-        device_map="auto",
-        token=hf_token,
-        attn_implementation="sdpa",   # eager materializes O(seq²) attn matrix → OOM
-    )
+    logger.info(f"  use_quantization={use_quantization}  is_distributed={is_distributed}  "
+                f"local_rank={local_rank}  world_size={world_size}")
+
+    if not use_quantization:
+        # ── Path A: bf16, no quantization (Gautschi H100, multi-GPU) ────────
+        # device_map={"": local_rank} places the entire model on this process's GPU.
+        # DDP handles gradient sync across ranks via GRPOTrainer + accelerate.
+        attn_impl = "flash_attention_2"  # H100 + flash-attn package required
+        try:
+            import flash_attn  # noqa: F401
+        except ImportError:
+            logger.warning("flash-attn not installed — falling back to sdpa")
+            attn_impl = "sdpa"
+
+        base_model = AutoModelForCausalLM.from_pretrained(
+            cfg.model.base_model,
+            torch_dtype=torch.bfloat16,
+            device_map={"": local_rank},
+            token=hf_token,
+            attn_implementation=attn_impl,
+        )
+    else:
+        # ── Path B: 4-bit quantization (single GPU, RunPod / local) ─────────
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
+        base_model = AutoModelForCausalLM.from_pretrained(
+            cfg.model.base_model,
+            quantization_config=bnb_config,
+            device_map="auto",
+            token=hf_token,
+            attn_implementation="sdpa",   # eager materializes O(seq²) attn matrix → OOM
+        )
+
     model = PeftModel.from_pretrained(base_model, sft_checkpoint, is_trainable=True)
     tokenizer = AutoTokenizer.from_pretrained(sft_checkpoint)
 

@@ -28,8 +28,17 @@ if "HF_HOME" not in os.environ:
     _vol = os.environ.get("VOLUME", "/runpod-volume")
     os.environ["HF_HOME"] = os.path.join(_vol, ".hf-cache")
 
+import argparse as _argparse
 from omegaconf import OmegaConf
-_cfg = OmegaConf.load(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "config_runpod.yaml"))
+
+_ap = _argparse.ArgumentParser(add_help=False)
+_ap.add_argument("--config", default=None, help="Path to config YAML (default: configs/config_runpod.yaml)")
+_args, _ = _ap.parse_known_args()
+_default_config = _args.config or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "configs", "config_runpod.yaml",
+)
+_cfg = OmegaConf.load(_default_config)
 
 BASE_MODEL_PATH = _cfg.model.base_model                           # meta-llama/Llama-3.2-3B-Instruct
 TRAIN_JSON      = os.path.join(_cfg.paths.processed_dir, "train.json")
@@ -66,7 +75,7 @@ max_seq_length = _cfg.model.max_seq_length  # RoPE Scaling is handled automatica
 # 500 tokens is a deliberate cost-saving choice. The paper does not truncate retrieved
 # context — increasing MAX_RETRIEVED_TOKENS improves RAG fidelity at the cost of
 # proportionally less room for the GT STEP output within max_seq_length.
-MAX_RETRIEVED_TOKENS = 500
+MAX_RETRIEVED_TOKENS = int(getattr(_cfg.model, "max_retrieved_tokens", 500))  # configurable; Gautschi sets 4096 (paper-faithful)
 dtype = None            # None = auto-detect (bfloat16 on Ampere+, float16 on older GPUs)
 load_in_4bit = False    # Set True to use 4-bit quantisation (reduces VRAM, slight quality loss)
 
