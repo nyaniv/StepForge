@@ -79,10 +79,10 @@ pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
 # Flash Attention 2 (H100 native; speeds up long-context SFT/RL)
 pip install flash-attn --no-build-isolation
 
-# Core training stack — pin trl to 0.29.0 for GRPOTrainer compatibility
+# Core training stack — do NOT pin trl here; unsloth already installed a compatible version
+# (unsloth_zoo requires trl<=0.24.0; forcing 0.29.0 breaks unsloth at SFT runtime)
 pip install \
     "transformers>=4.51.3" \
-    "trl==0.29.0" \
     "peft>=0.10" \
     "accelerate>=0.30" \
     "datasets" \
