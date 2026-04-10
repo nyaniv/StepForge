@@ -108,49 +108,56 @@ echo "[4/5] Downloading Text2CAD dataset to \$SCRATCH..."
 DATA_DIR="$SCRATCH/data"
 mkdir -p "$DATA_DIR"
 
-# HuggingFace download (requires token for gated files if applicable)
+# HuggingFace download
 if [ -n "$HF_TOKEN" ]; then
     export HUGGINGFACE_TOKEN="$HF_TOKEN"
     export HF_TOKEN="$HF_TOKEN"
 fi
 
-if [ ! -f "$DATA_DIR/text2cad_v1.1.csv" ]; then
-    echo "  Downloading text2cad_v1.1.csv..."
-    python -c "
+python - <<PYEOF
+import os, shutil
 from huggingface_hub import hf_hub_download
-import shutil, os
-path = hf_hub_download(repo_id='cadbuilder/text2cad', filename='text2cad_v1.1.csv',
-                       repo_type='dataset', local_dir='$DATA_DIR')
-print(f'  Saved to {path}')
-"
-else
-    echo "  text2cad_v1.1.csv already present — skipping."
-fi
 
-if [ ! -f "$DATA_DIR/train_test_val.json" ]; then
-    echo "  Downloading train_test_val.json..."
-    python -c "
-from huggingface_hub import hf_hub_download
-path = hf_hub_download(repo_id='cadbuilder/text2cad', filename='train_test_val.json',
-                       repo_type='dataset', local_dir='$DATA_DIR')
-print(f'  Saved to {path}')
-"
-else
-    echo "  train_test_val.json already present — skipping."
-fi
+DATA_DIR = "$DATA_DIR"
+TOKEN = os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
 
-if [ ! -f "$DATA_DIR/cad_seq.zip" ] && [ ! -d "$DATA_DIR/cad_seq" ]; then
-    echo "  Downloading cad_seq.zip (~several GB, this may take a while)..."
-    python -c "
-from huggingface_hub import hf_hub_download
-path = hf_hub_download(repo_id='cadbuilder/text2cad', filename='cad_seq.zip',
-                       repo_type='dataset', local_dir='$DATA_DIR')
-print(f'  Saved to {path}')
-"
-    echo "  Extracting cad_seq.zip..."
-    cd "$DATA_DIR" && unzip -q cad_seq.zip -d cad_seq
-else
-    echo "  cad_seq already present — skipping."
+# Repo: SadilKhan/Text2CAD  (HuggingFace dataset)
+# Files: text2cad_v1.1/ subfolder for CSV/JSON, cad_seq.zip at root
+files = [
+    ("text2cad_v1.1/text2cad_v1.1.csv",  f"{DATA_DIR}/text2cad_v1.1.csv"),
+    ("text2cad_v1.1/train_test_val.json", f"{DATA_DIR}/train_test_val.json"),
+    ("cad_seq.zip",                        f"{DATA_DIR}/cad_seq.zip"),
+]
+tmp_dir = f"{DATA_DIR}/.hf_tmp"
+os.makedirs(tmp_dir, exist_ok=True)
+
+for hf_fname, dest in files:
+    if os.path.exists(dest):
+        print(f"  already present: {dest}")
+        continue
+    # Skip cad_seq.zip if already extracted
+    if hf_fname == "cad_seq.zip" and os.path.isdir(f"{DATA_DIR}/cad_seq"):
+        print(f"  cad_seq/ already extracted — skipping zip download")
+        continue
+    print(f"  downloading {hf_fname} ...")
+    downloaded = hf_hub_download(
+        repo_id="SadilKhan/Text2CAD",
+        repo_type="dataset",
+        filename=hf_fname,
+        local_dir=tmp_dir,
+        token=TOKEN,
+    )
+    shutil.move(downloaded, dest)
+    print(f"  saved to {dest}")
+
+shutil.rmtree(tmp_dir, ignore_errors=True)
+PYEOF
+
+# Extract cad_seq.zip if needed
+if [ -f "$DATA_DIR/cad_seq.zip" ] && [ ! -d "$DATA_DIR/cad_seq" ]; then
+    echo "  Extracting cad_seq.zip (this takes a while)..."
+    unzip -q "$DATA_DIR/cad_seq.zip" -d "$DATA_DIR/"
+    echo "  Extraction complete."
 fi
 
 # Clone Text2CAD source (for CadSeqProc)
