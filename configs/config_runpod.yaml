@@ -30,34 +30,36 @@ data:
   caption_column: "abstract"  # use L0 abstract captions
 
 model:
-  base_model: "meta-llama/Llama-3.2-3B-Instruct"  # best per paper Table 3
-  max_seq_length: 8192
-  lora_r: 16
-  lora_alpha: 32
-  lora_dropout: 0.0   # must be 0 — Unsloth kernel fusions break with non-zero dropout
+  base_model: "meta-llama/Llama-3.2-3B-Instruct"  # paper Table 3: selected over Qwen-2.5-3B
+  max_seq_length: 8192       # NOT stated in paper; 8192 fits prompt+output on A100 80GB
+  lora_r: 16                 # NOT stated in paper; from implementation plan
+  lora_alpha: 32             # NOT stated in paper; from implementation plan
+  lora_dropout: 0.0          # must be 0.0 — Unsloth kernel fusions break with non-zero dropout
 
 sft:
-  per_device_train_batch_size: 2    # reduced from 4; 500-token context OOMs at 4
-  gradient_accumulation_steps: 8    # increased from 4; keeps effective batch=16
-  learning_rate: 2.0e-4             # paper
-  num_epochs: 1                     # smoke test — 1 epoch to verify SFT works before full run
-  warmup_ratio: 0.05                # paper
-  optim: "adamw_8bit"               # paper
+  # Paper Section 4.1 values (single A100 80GB smoke-test deviations noted inline):
+  per_device_train_batch_size: 2    # paper: effective batch=16; 2×8=16
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4             # paper: "learning rate of 2e-4"
+  num_epochs: 1                     # DEVIATION: smoke test; paper trains for 10 epochs
+  warmup_ratio: 0.05                # paper: "warm-up of 5% of the total training steps"
+  optim: "adamw_8bit"               # paper: "AdamW (8-bit) optimizer"
 
 rl:
-  num_generations: 4                # paper says reduce to 4 on single GPU (OOM with 8)
-  kl_coef: 0.02                     # paper
-  entropy_coef: 0.005               # paper
-  learning_rate: 3.0e-6             # paper
-  per_device_train_batch_size: 1    # reduced from 2 to fit 80GB with 4 generations
-  gradient_accumulation_steps: 8    # 8 to keep effective batch=8 (1×8)
-  max_steps: 40                     # budget run: 40 steps to validate reward signal
-  max_completion_length: 4096       # covers 40.9% of training examples on A100 80GB
+  # Paper Section 4.4 values — single-GPU deviations noted inline:
+  num_generations: 4                # DEVIATION: paper uses 8; reduced to 4 on single A100 to avoid OOM
+  kl_coef: 0.02                     # paper: "KL penalty coefficient of 0.02"
+  entropy_coef: 0.005               # paper: "entropy coefficient of 0.005"
+  learning_rate: 3.0e-6             # paper: "learning rate of 3e-6"
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8    # single GPU: 1×8 accum = 8 total prompts (matches paper's effective batch of 8)
+  max_steps: 40                     # DEVIATION: paper uses 80; reduced for budget smoke-test
+  max_completion_length: 4096       # NOT stated in paper; must match build_rl_dataset filter
   reward:
-    delta_low: 0.01                 # paper
-    delta_high: 0.5                 # paper
-    n_sample_points: 2048
+    delta_low: 0.01                 # paper Section 4.4: "lower bound to 0.01"
+    delta_high: 0.5                 # paper Section 4.4: "upper bound to 0.5"
+    n_sample_points: 2048           # NOT stated in paper; from implementation plan
 
 retrieval:
-  model: "all-MiniLM-L6-v2"
-  top_k: 1                          # paper retrieves top-1
+  model: "all-MiniLM-L6-v2"  # paper Section 3.2: "SentenceTransformer to embed captions"
+  top_k: 1                    # paper Section 3.2: retrieves single most similar example

@@ -35,41 +35,52 @@ data:
   caption_column: "abstract" # L0 single-sentence captions (paper)
 
 model:
-  base_model: "meta-llama/Llama-3.2-3B-Instruct"  # best per paper Table 3
-  max_seq_length: 16384      # H100 80GB + FlashAttention-2 can handle 16K; gives full RAG context
-  lora_r: 16                 # paper
-  lora_alpha: 32             # paper
+  base_model: "meta-llama/Llama-3.2-3B-Instruct"  # paper Table 3: selected over Qwen-2.5-3B (lower MSCD)
+  # max_seq_length is NOT stated in the paper.  We use 16384 so the full retrieved
+  # STEP file fits without truncation — the paper does not truncate retrieved context.
+  # H100 80GB + FlashAttention-2 handles 16K without OOM.
+  max_seq_length: 16384
+  # LoRA r/alpha are NOT stated in the paper; these come from the implementation plan.
+  lora_r: 16
+  lora_alpha: 32
   lora_dropout: 0.0          # must be 0.0 — Unsloth kernel fusions break with non-zero dropout
-  use_quantization: false    # 3B in bf16 = ~6 GB — H100 80GB has ample headroom; no 4-bit needed
-  max_retrieved_tokens: 4096 # paper does NOT truncate; 4096 covers a full median STEP file
+  use_quantization: false    # 3B in bf16 = ~6 GB; H100 80GB has ample headroom, no quantization needed
+  # max_retrieved_tokens is NOT stated in the paper (paper does not truncate).
+  # 4096 tokens covers a median STEP file (~265 entities × ~14 tok/entity ≈ 3710 tokens).
+  max_retrieved_tokens: 4096
 
 sft:
-  # Single H100 80GB with Unsloth (Unsloth does not support multi-GPU)
-  # Effective batch = per_device × grad_accum = 2 × 8 = 16  (paper value)
+  # All values below are FROM THE PAPER (Section 4.1).
+  # Single H100 80GB with Unsloth (Unsloth is single-GPU only).
+  # Effective batch = per_device × grad_accum = 2 × 8 = 16  (paper: "effective batch size of 16")
   per_device_train_batch_size: 2
   gradient_accumulation_steps: 8
-  learning_rate: 2.0e-4      # paper
-  num_epochs: 10             # paper
-  warmup_ratio: 0.05         # paper
-  optim: "adamw_8bit"        # paper
+  learning_rate: 2.0e-4      # paper Section 4.1: "learning rate of 2e-4"
+  num_epochs: 10             # paper Section 4.1: "trained for 10 epochs"
+  warmup_ratio: 0.05         # paper Section 4.1: "warm-up of 5% of the total training steps"
+  optim: "adamw_8bit"        # paper Section 4.1: "AdamW (8-bit) optimizer"
 
 rl:
-  # 8× H100 via torchrun DDP.  Throughput matches paper's 4×H100 setup:
-  #   paper:    4 GPUs × 2 prompts/GPU × 8 gen/prompt = 64 sequences/step
-  #   gautschi: 8 GPUs × 1 prompt/GPU  × 8 gen/prompt = 64 sequences/step
-  num_generations: 8               # paper value
-  kl_coef: 0.02                    # paper
-  entropy_coef: 0.005              # paper
-  learning_rate: 3.0e-6            # paper
-  per_device_train_batch_size: 1   # 1 prompt × 8 GPUs = 8 prompts/step; ×8 gen = 64 sequences
-  gradient_accumulation_steps: 1   # 8 GPUs already gives sufficient effective batch
-  max_steps: 80                    # paper value (same as paper — 4×H100 reference run)
-  max_completion_length: 8192      # H100 80GB + FlashAttention-2 can fit 8K completions; doubles trainable data vs 4096
+  # All values below are FROM THE PAPER (Section 4.4) unless marked otherwise.
+  #
+  # Paper ran 4×H100 × 2 prompts/GPU × 8 gen/prompt = 64 sequences/step
+  # Gautschi: 8×H100 × 1 prompt/GPU  × 8 gen/prompt = 64 sequences/step  ← same throughput
+  num_generations: 8               # paper Section 4.4: "8 sampled responses per prompt"
+  kl_coef: 0.02                    # paper Section 4.4: "KL penalty coefficient of 0.02"
+  entropy_coef: 0.005              # paper Section 4.4: "entropy coefficient of 0.005"
+  learning_rate: 3.0e-6            # paper Section 4.4: "learning rate of 3e-6"
+  per_device_train_batch_size: 1   # derived: paper batch=8 total, 8 GPUs → 1 per GPU
+  gradient_accumulation_steps: 1   # derived: 8 GPUs × 1 per_device × 1 accum = 8 total prompts
+  max_steps: 80                    # paper Section 4.4: "total of 80 optimization steps"
+  # max_completion_length is NOT stated in the paper.  8192 is our engineering choice
+  # for H100 with FlashAttention-2; increases trainable examples vs the 4096 used on A100.
+  max_completion_length: 8192
   reward:
-    delta_low: 0.01                # paper
-    delta_high: 0.5                # paper
-    n_sample_points: 2048          # paper
+    delta_low: 0.01                # paper Section 4.4: "lower bound to 0.01"
+    delta_high: 0.5                # paper Section 4.4: "upper bound to 0.5"
+    # n_sample_points is NOT stated in the paper.  2048 is from the implementation plan.
+    n_sample_points: 2048
 
 retrieval:
-  model: "all-MiniLM-L6-v2"       # paper
-  top_k: 1                         # paper retrieves top-1
+  model: "all-MiniLM-L6-v2"  # paper Section 3.2: "SentenceTransformer to embed captions"
+  top_k: 1                    # paper Section 3.2: retrieves single most similar example
