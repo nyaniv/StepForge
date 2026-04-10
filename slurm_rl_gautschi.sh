@@ -39,8 +39,8 @@ fi
 
 # ── Load Gautschi modules ────────────────────────────────────────────────────
 module purge
-module load anaconda        # check exact name: module spider anaconda
-module load cuda/12.2       # H100 requires CUDA >= 11.8; check: module spider cuda
+module load anaconda/2024.10-py312
+module load cuda/12.6.0
 
 # ── Activate conda environment ───────────────────────────────────────────────
 source "$(conda info --base)/etc/profile.d/conda.sh"

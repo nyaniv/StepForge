@@ -44,8 +44,8 @@ fi
 #                                  module spider cuda
 echo "[1/5] Loading modules..."
 module purge
-module load anaconda        # adjust version if needed: e.g. anaconda/2023.09
-module load cuda/12.2       # H100 requires CUDA >= 11.8; 12.x recommended
+module load anaconda/2024.10-py312
+module load cuda/12.6.0
 
 # ── 2. Create conda environment ──────────────────────────────────────────────
 echo "[2/5] Creating conda environment '$CONDA_ENV_NAME'..."
