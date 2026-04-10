@@ -27,7 +27,8 @@
 #SBATCH --cpus-per-task=14          # 112 CPUs / 8 GPUs = 14 CPUs per task
 #SBATCH --mem=800G                  # ~100 GB per GPU process; well within 1 TB
 #SBATCH --gres=gpu:8                # full node: 8× H100 80GB
-#SBATCH --partition=gpu             # check available partitions: slist
+#SBATCH --partition=lilly-agentic-gpu
+#SBATCH --account=lilly-agentic-gpu
 #SBATCH --requeue                   # allow requeue on preemption or time limit
 #SBATCH --signal=B:SIGUSR1@120      # warn 120 s before wall-time so we can resubmit
 # #SBATCH --account=YOUR_ACCOUNT   # uncomment and set if your allocation requires it

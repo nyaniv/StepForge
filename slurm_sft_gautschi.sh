@@ -17,8 +17,8 @@
 #SBATCH --cpus-per-task=16          # plenty for data workers + OCC subprocesses
 #SBATCH --mem=128G                  # well within the 1 TB node limit
 #SBATCH --gres=gpu:1                # 1× H100 80GB — Unsloth does not support multi-GPU
-#SBATCH --partition=gpu             # check available partitions: slist
-# #SBATCH --account=YOUR_ACCOUNT   # uncomment and set if your allocation requires it
+#SBATCH --partition=lilly-agentic-gpu
+#SBATCH --account=lilly-agentic-gpu
 
 # ── Source the module system ─────────────────────────────────────────────────
 if [ -f /etc/profile.d/modules.sh ]; then
