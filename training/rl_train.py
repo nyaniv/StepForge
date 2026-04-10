@@ -43,11 +43,16 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Route HF downloads to the network volume — the container disk is too small.
-# Must be set before any transformers/huggingface_hub imports.
+# Route HF downloads to scratch/network volume — home quota is too small for
+# multi-GB model weights.  Must be set before any transformers/huggingface_hub
+# imports.  Priority: existing env var → $SCRATCH (Gautschi) → VOLUME (RunPod).
 if "HF_HOME" not in os.environ:
-    _vol = os.environ.get("VOLUME", "/runpod-volume")
-    os.environ["HF_HOME"] = os.path.join(_vol, ".hf-cache")
+    _scratch = os.environ.get("SCRATCH", "")
+    if _scratch:
+        os.environ["HF_HOME"] = os.path.join(_scratch, ".hf-cache")
+    else:
+        _vol = os.environ.get("VOLUME", "/runpod-volume")
+        os.environ["HF_HOME"] = os.path.join(_vol, ".hf-cache")
 
 import time
 import torch
@@ -203,11 +208,20 @@ def main():
     use_quantization = bool(getattr(cfg.model, "use_quantization", True))
 
     # ── File logging ─────────────────────────────────────────────────────────
+    # Remove ALL existing handlers first (loguru adds a default stderr sink at
+    # import time; repeated restarts via SLURM requeue would stack handlers).
+    logger.remove()
     os.makedirs(cfg.paths.rl_checkpoint_dir, exist_ok=True)
-    _log_path = os.path.join(cfg.paths.rl_checkpoint_dir, "rl_train.log")
-    logger.add(_log_path, level="DEBUG", format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}", enqueue=True)
-    logger.add(sys.stdout, level="INFO",  format="{time:HH:mm:ss} | {level} | {message}")
-    logger.info(f"Logging to {_log_path}")
+    # Only rank 0 writes to the shared log file; all ranks log to stdout with
+    # their rank prefix so per-rank output is distinguishable.
+    if local_rank == 0:
+        _log_path = os.path.join(cfg.paths.rl_checkpoint_dir, "rl_train.log")
+        logger.add(_log_path, level="DEBUG",
+                   format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+                   enqueue=True)
+        logger.info(f"Logging to {_log_path}")
+    logger.add(sys.stdout, level="INFO",
+               format=f"{{time:HH:mm:ss}} | rank{local_rank} | {{level}} | {{message}}")
     _train_start = time.time()
     # ── End file logging ─────────────────────────────────────────────────────
 
@@ -275,19 +289,44 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"  # GRPO requires left-padding
 
-    # ── Load retriever for live RAG ──────────────────────────────────────────
-    retriever = Retriever(
-        index_path=cfg.paths.faiss_index_path,
-        metadata_path=cfg.paths.faiss_metadata_path,
-        model_name=cfg.retrieval.model,
-    )
-
-    # ── Build RL dataset ─────────────────────────────────────────────────────
+    # ── Build RL dataset — rank 0 only, then file-barrier sync ──────────────
+    # BUG PREVENTION:
+    #   - Only rank 0 loads the Retriever so that the SentenceTransformer
+    #     (which auto-selects the first available GPU) is not instantiated by
+    #     all 8 processes simultaneously, all targeting cuda:0.
+    #   - We use a file-based barrier instead of dist.init_process_group so
+    #     we don't race with accelerate's own distributed initialisation inside
+    #     GRPOTrainer.
+    max_completion_length = int(getattr(cfg.rl, "max_completion_length", 4096))
     train_json = os.path.join(cfg.paths.processed_dir, "train.json")
-    rl_dataset = build_rl_dataset(
-        train_json, retriever, tokenizer, max_completion_length=4096
-    )
-    rl_dataset = rl_dataset.shuffle(seed=42)
+    dataset_cache_path = os.path.join(cfg.paths.rl_checkpoint_dir, "rl_dataset_cache")
+    dataset_done_flag  = dataset_cache_path + ".done"
+
+    if local_rank == 0:
+        logger.info("Rank 0: building RL dataset with live RAG...")
+        retriever = Retriever(
+            index_path=cfg.paths.faiss_index_path,
+            metadata_path=cfg.paths.faiss_metadata_path,
+            model_name=cfg.retrieval.model,
+            device="cpu",   # keep SentenceTransformer off GPU 0 — training model is already there
+        )
+        rl_dataset = build_rl_dataset(
+            train_json, retriever, tokenizer,
+            max_completion_length=max_completion_length,
+        )
+        rl_dataset = rl_dataset.shuffle(seed=42)
+        rl_dataset.save_to_disk(dataset_cache_path)
+        # Signal other ranks that the dataset is ready
+        open(dataset_done_flag, "w").close()
+        logger.info(f"Rank 0: dataset saved to {dataset_cache_path}")
+    else:
+        # Wait for rank 0's file-barrier signal (shared filesystem is visible to all nodes)
+        logger.info(f"Rank {local_rank}: waiting for rank 0 to build dataset...")
+        while not os.path.exists(dataset_done_flag):
+            time.sleep(5)
+        from datasets import load_from_disk
+        rl_dataset = load_from_disk(dataset_cache_path)
+        logger.info(f"Rank {local_rank}: dataset loaded ({len(rl_dataset)} examples)")
 
     # ── Reward functions ─────────────────────────────────────────────────────
     parse_reward_fn = make_parse_reward_fn(text2cad_src=cfg.paths.text2cad_src)
@@ -317,12 +356,17 @@ def main():
         per_device_train_batch_size=cfg.rl.per_device_train_batch_size,
         gradient_accumulation_steps=cfg.rl.gradient_accumulation_steps,
         max_steps=cfg.rl.max_steps,
-        max_completion_length=4096,   # covers 40.9% of examples; sdpa fits 80GB
+        max_completion_length=max_completion_length,  # from config; matches build_rl_dataset filter
         bf16=True,
         logging_steps=1,
         save_steps=20,
         report_to="tensorboard",
         seed=42,
+        # remove_unused_columns=False is CRITICAL: GRPOTrainer passes reward
+        # function kwargs from dataset columns.  The default (True) would silently
+        # strip ground_truth_step before it ever reaches the geometry reward fn,
+        # making the entire reward signal zero while training appears to proceed.
+        remove_unused_columns=False,
     )
 
     model.config.use_cache = False
@@ -349,10 +393,13 @@ def main():
     _train_elapsed = time.time() - _train_start
     logger.info(f"RL training complete in {_train_elapsed/3600:.2f}h")
 
-    final_path = os.path.join(cfg.paths.rl_checkpoint_dir, "final")
-    model.save_pretrained(final_path)
-    tokenizer.save_pretrained(final_path)
-    logger.info(f"Model saved to {final_path}")
+    # Only rank 0 saves — all 8 DDP ranks hitting save_pretrained on the same
+    # path simultaneously causes a race condition and corrupts the checkpoint.
+    if local_rank == 0:
+        final_path = os.path.join(cfg.paths.rl_checkpoint_dir, "final")
+        model.save_pretrained(final_path)
+        tokenizer.save_pretrained(final_path)
+        logger.info(f"Model saved to {final_path}")
 
 
 if __name__ == "__main__":

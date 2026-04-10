@@ -40,6 +40,7 @@ rl:
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 8
   max_steps: 80                     # paper (increase to 160 on single GPU)
+  max_completion_length: 4096       # matches build_rl_dataset filter; must be consistent
   reward:
     delta_low: 0.01                 # paper
     delta_high: 0.5                 # paper

@@ -19,7 +19,8 @@ from sentence_transformers import SentenceTransformer
 
 class Retriever:
     def __init__(self, index_path: str, metadata_path: str,
-                 model_name: str = "all-MiniLM-L6-v2"):
+                 model_name: str = "all-MiniLM-L6-v2",
+                 device: Optional[str] = None):
         """
         Load the FAISS index and metadata from disk.
 
@@ -27,12 +28,15 @@ class Retriever:
             index_path: path to the .faiss index file
             metadata_path: path to the metadata .pkl file
             model_name: SentenceTransformer model (must match build_index.py)
+            device: device for SentenceTransformer ('cpu', 'cuda', etc.).
+                    Defaults to SentenceTransformer's auto-detection. Pass 'cpu'
+                    in multi-GPU contexts to avoid all ranks racing for GPU 0.
         """
         logger.info(f"Loading FAISS index from {index_path}")
         self.index = faiss.read_index(index_path)
         with open(metadata_path, "rb") as fh:
             self.records = pickle.load(fh)
-        self.model = SentenceTransformer(model_name)
+        self.model = SentenceTransformer(model_name, device=device)
         logger.info(f"Retriever ready: {len(self.records)} training examples indexed")
 
     def retrieve(self, query_caption: str, exclude_uid: Optional[str] = None) -> dict:

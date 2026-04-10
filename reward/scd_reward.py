@@ -100,13 +100,19 @@ def compute_parse_reward(generated_step: str, text2cad_src: str | None = None,
         if proc.is_alive():
             proc.kill()
             proc.join()
-    queue.close()
     if proc.exitcode != 0:
+        queue.close()
         return 0.0
     try:
-        return reward_value if queue.get_nowait() == 1 else 0.0
+        # Use timeout instead of get_nowait: the OS pipe feeder thread may not
+        # have flushed the result yet when proc.join() returns, causing a
+        # spurious Empty exception even though the subprocess put() succeeded.
+        result = queue.get(timeout=5)
+        return reward_value if result == 1 else 0.0
     except Exception:
         return 0.0
+    finally:
+        queue.close()
 
 
 # ── Subprocess worker (isolates Open3D segfaults) ─────────────────────────────
@@ -203,16 +209,21 @@ def compute_reward(
         if proc.is_alive():
             proc.kill()
             proc.join()
-    queue.close()
 
     if proc.exitcode != 0:
         if verbose:
             print(f"[compute_reward] subprocess failed: exitcode={proc.exitcode}")
+        queue.close()
         return 0.0
 
     try:
-        return queue.get_nowait()
+        # Use timeout instead of get_nowait: the OS pipe feeder thread may not
+        # have flushed the result yet when proc.join() returns, causing a
+        # spurious Empty exception even though the subprocess put() succeeded.
+        return queue.get(timeout=5)
     except Exception:
         if verbose:
             print("[compute_reward] subprocess exited cleanly but queue was empty")
         return 0.0
+    finally:
+        queue.close()

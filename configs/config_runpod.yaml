@@ -52,6 +52,7 @@ rl:
   per_device_train_batch_size: 1    # reduced from 2 to fit 80GB with 4 generations
   gradient_accumulation_steps: 8    # 8 to keep effective batch=8 (1×8)
   max_steps: 40                     # budget run: 40 steps to validate reward signal
+  max_completion_length: 4096       # covers 40.9% of training examples on A100 80GB
   reward:
     delta_low: 0.01                 # paper
     delta_high: 0.5                 # paper
