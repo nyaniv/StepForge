@@ -41,8 +41,8 @@ _cfg_path = _args.config if os.path.isabs(_args.config) else os.path.join(
 _cfg = OmegaConf.load(_cfg_path)
 
 BASE_MODEL_PATH = _cfg.model.base_model                           # meta-llama/Llama-3.2-3B-Instruct
-TRAIN_JSON      = os.path.join(_cfg.paths.processed_dir, "train.json")
-TEST_JSON       = os.path.join(_cfg.paths.processed_dir, "test.json")
+TRAIN_JSON      = os.path.join(_cfg.paths.processed_dir, "train_with_rag.jsonl")
+TEST_JSON       = os.path.join(_cfg.paths.processed_dir, "test.jsonl")
 LORA_SAVE_PATH  = os.path.join(_cfg.paths.sft_checkpoint_dir, "final")
 OUTPUT_DIR      = _cfg.paths.sft_checkpoint_dir
 USE_RAG         = True
@@ -152,11 +152,11 @@ _fmt_stats = {
 def formatting_prompts_func(examples):
     """Format dataset examples into the training prompt."""
     instructions = examples["caption"]
-    outputs = examples["output"]
+    outputs = examples["step"]
     texts = []
 
     if USE_RAG:
-        inputs = examples["relavant_step_file"]
+        inputs = examples["retrieved_step"]
         for instruction, input_, output in zip(instructions, inputs, outputs):
             _fmt_stats["total"] += 1
 
@@ -259,14 +259,14 @@ if (os.path.exists(_FORMATTED_TRAIN) and os.path.exists(_FORMATTED_TEST)
 else:
     logger.info(f"Loading train data from {TRAIN_JSON}")
     with open(TRAIN_JSON) as f:
-        train_records = json.load(f)
+        train_records = [json.loads(line) for line in f if line.strip()]
     dataset = Dataset.from_list(train_records)
     del train_records
     logger.info(f"  Raw train records: {len(dataset)}")
 
     logger.info(f"Loading test data from {TEST_JSON}")
     with open(TEST_JSON) as f:
-        test_records = json.load(f)
+        test_records = [json.loads(line) for line in f if line.strip()]
     test_dataset = Dataset.from_list(test_records)
     del test_records
     logger.info(f"  Raw test records:  {len(test_dataset)}")
