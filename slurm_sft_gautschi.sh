@@ -14,11 +14,11 @@
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16          # plenty for data workers + OCC subprocesses
+#SBATCH --cpus-per-task=14          # AI partition requires 14 CPUs per GPU
 #SBATCH --mem=128G                  # well within the 1 TB node limit
 #SBATCH --gres=gpu:1                # 1× H100 80GB — Unsloth does not support multi-GPU
-#SBATCH --partition=gpu             # check available partitions: slist
-# #SBATCH --account=YOUR_ACCOUNT   # uncomment and set if your allocation requires it
+#SBATCH --partition=ai
+#SBATCH --account=lilly-agentic-gpu
 
 # ── Source the module system ─────────────────────────────────────────────────
 if [ -f /etc/profile.d/modules.sh ]; then
@@ -41,12 +41,6 @@ export PYTHONPATH="${HOME}/StepForge:${PYTHONPATH:-}"
 export KMP_DUPLICATE_LIB_OK=TRUE
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
-# ── WandB ─────────────────────────────────────────────────────────────────────
-export WANDB_PROJECT="stepforge"
-export WANDB_RUN_NAME="sft-${SLURM_JOB_ID}"   # unique name per job for side-by-side comparison
-# WANDB_API_KEY must be set in your environment before submitting, or run `wandb login` first
-export WANDB_API_KEY="${WANDB_API_KEY:?Set WANDB_API_KEY or run: wandb login}"
 
 # ── Ensure output directories exist ──────────────────────────────────────────
 mkdir -p "$SCRATCH/stepforge/logs"
