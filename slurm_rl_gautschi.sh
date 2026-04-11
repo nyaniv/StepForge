@@ -115,9 +115,13 @@ echo " Started  : $(date)"
 echo " Config   : configs/config_gautschi.yaml"
 echo "========================================"
 
-# ── Run RL via torchrun (8-GPU DDP) ─────────────────────────────────────────
+# ── Preflight check ──────────────────────────────────────────────────────────
 cd "${HOME}/StepForge"
 
+echo "Running preflight environment check..."
+python training/preflight_check.py || { echo "PREFLIGHT FAILED — aborting job"; exit 1; }
+
+# ── Run RL via torchrun (8-GPU DDP) ─────────────────────────────────────────
 torchrun \
     --standalone \
     --nproc_per_node=8 \

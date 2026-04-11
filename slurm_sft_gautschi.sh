@@ -89,9 +89,13 @@ echo " Started  : $(date)"
 echo " Config   : configs/config_gautschi.yaml"
 echo "========================================"
 
-# ── Run SFT ──────────────────────────────────────────────────────────────────
+# ── Preflight check ──────────────────────────────────────────────────────────
 cd "${HOME}/StepForge"
 
+echo "Running preflight environment check..."
+python training/preflight_check.py || { echo "PREFLIGHT FAILED — aborting job"; exit 1; }
+
+# ── Run SFT ──────────────────────────────────────────────────────────────────
 python training/llama3_SFT_response.py \
     --config configs/config_gautschi.yaml
 
