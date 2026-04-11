@@ -83,8 +83,18 @@ pip uninstall torchao -y 2>/dev/null || true
 echo "[5/6] Building FAISS index..."
 python retrieval/build_index.py --config configs/config_gautschi.yaml
 
-echo "[6/6] Precomputing RAG..."
+echo "[6/8] Precomputing RAG..."
 python data/precompute_rag.py --config configs/config_gautschi.yaml
+
+# ── Paper-format data (for refined-variant branch) ───────────────────────────
+# Produces train.json / val.json / test.json with official STEP-LLM field names
+# (output, relavant_step_file) consumed by the refined-variant SFT script.
+
+echo "[7/8] Building RAG dataset (paper format: output + relavant_step_file)..."
+python data/dataset_construct_rag.py --config configs/config_gautschi.yaml
+
+echo "[8/8] Splitting into train / val / test (paper format)..."
+python data/data_split.py --config configs/config_gautschi.yaml
 
 echo "========================================"
 echo " Data pipeline finished : $(date)"
