@@ -194,9 +194,12 @@ for i in range(len(dataset)):
 print("\n[Step 3] Running DataCollatorForSeq2Seq (pad + batch) ...")
 collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, padding=True, return_tensors="pt")
 
-# Use dataset.select to get a small batch
-batch_records = [dataset[i] for i in range(min(4, len(dataset)))]
-# DataCollatorForSeq2Seq expects dicts with lists/tensors
+# Strip non-tensor columns — collator only needs input_ids, attention_mask, labels
+_COLLATOR_COLS = {"input_ids", "attention_mask", "labels"}
+batch_records = [
+    {k: v for k, v in dataset[i].items() if k in _COLLATOR_COLS}
+    for i in range(min(4, len(dataset)))
+]
 batch = collator(batch_records)
 
 assert "input_ids" in batch, "FAIL: input_ids not in batch"
