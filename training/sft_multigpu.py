@@ -70,11 +70,26 @@ cfg_path = args.config if os.path.isabs(args.config) else os.path.join(
 cfg = OmegaConf.load(cfg_path)
 
 BASE_MODEL_PATH = cfg.model.base_model
-TRAIN_JSON      = os.path.join(cfg.paths.processed_dir, "train_with_rag.jsonl")
-TEST_JSON       = os.path.join(cfg.paths.processed_dir, "test.jsonl")
 OUTPUT_DIR      = cfg.paths.sft_checkpoint_dir
 LORA_SAVE_PATH  = os.path.join(OUTPUT_DIR, "final")
-USE_RAG         = True
+
+# Auto-detect data format:
+#   main branch:            train_with_rag.jsonl  (fields: step, retrieved_step)
+#   refined-variant branch: train.json            (fields: output, relavant_step_file)
+_train_jsonl = os.path.join(cfg.paths.processed_dir, "train_with_rag.jsonl")
+_train_json  = os.path.join(cfg.paths.processed_dir, "train.json")
+if os.path.exists(_train_jsonl):
+    TRAIN_JSON   = _train_jsonl
+    TEST_JSON    = os.path.join(cfg.paths.processed_dir, "test.jsonl")
+    _STEP_FIELD  = "step"
+    _RET_FIELD   = "retrieved_step"
+    _LOAD_JSON   = False  # JSONL format
+else:
+    TRAIN_JSON   = _train_json
+    TEST_JSON    = os.path.join(cfg.paths.processed_dir, "test.json")
+    _STEP_FIELD  = "output"
+    _RET_FIELD   = "relavant_step_file"
+    _LOAD_JSON   = True   # JSON array format
 
 max_seq_length = cfg.model.max_seq_length
 MAX_RETRIEVED_TOKENS = int(
@@ -99,6 +114,9 @@ if is_rank0:
     logger.info(f"World size: {world_size}  |  Local rank: {local_rank}")
     logger.info(f"Config: {cfg_path}")
     logger.info(f"Base model: {BASE_MODEL_PATH}")
+    logger.info(f"Data format: {'JSON array' if _LOAD_JSON else 'JSONL'}  "
+                f"step_field='{_STEP_FIELD}'  ret_field='{_RET_FIELD}'")
+    logger.info(f"Train: {TRAIN_JSON}")
     logger.info(f"max_seq_length={max_seq_length}  MAX_RETRIEVED_TOKENS={MAX_RETRIEVED_TOKENS}")
 
 # ── Load tokenizer ────────────────────────────────────────────────────────────
@@ -148,8 +166,8 @@ _fmt_stats = {"total": 0, "truncated": 0, "truncation_lengths": [],
 
 def formatting_prompts_func(examples):
     instructions = examples["caption"]
-    outputs      = examples["step"]
-    inputs       = examples.get("retrieved_step", [""] * len(instructions))
+    outputs      = examples[_STEP_FIELD]
+    inputs       = examples.get(_RET_FIELD, [""] * len(instructions))
 
     all_input_ids, all_attention_masks, all_labels, all_texts = [], [], [], []
 
@@ -254,15 +272,16 @@ if is_rank0:
         logger.info(f"  Train: {len(dataset)}  |  Test: {len(test_dataset)}")
     else:
         logger.info(f"Formatting datasets (cache miss)...")
-        logger.info(f"  Loading train from {TRAIN_JSON}")
+        logger.info(f"  Loading train from {TRAIN_JSON}  (format={'JSON array' if _LOAD_JSON else 'JSONL'})")
+        logger.info(f"  Fields: step='{_STEP_FIELD}'  retrieved='{_RET_FIELD}'")
         with open(TRAIN_JSON) as f:
-            train_records = [json.loads(l) for l in f if l.strip()]
+            train_records = json.load(f) if _LOAD_JSON else [json.loads(l) for l in f if l.strip()]
         dataset = Dataset.from_list(train_records); del train_records
         logger.info(f"  Raw train: {len(dataset)}")
 
         logger.info(f"  Loading test from {TEST_JSON}")
         with open(TEST_JSON) as f:
-            test_records = [json.loads(l) for l in f if l.strip()]
+            test_records = json.load(f) if _LOAD_JSON else [json.loads(l) for l in f if l.strip()]
         test_dataset = Dataset.from_list(test_records); del test_records
         logger.info(f"  Raw test: {len(test_dataset)}")
 
