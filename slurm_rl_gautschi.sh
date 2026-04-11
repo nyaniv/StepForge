@@ -122,11 +122,20 @@ echo "Running preflight environment check..."
 python training/preflight_check.py || { echo "PREFLIGHT FAILED — aborting job"; exit 1; }
 
 # ── Run RL via torchrun (8-GPU DDP) ─────────────────────────────────────────
+# Optional: pass --sft-checkpoint to override the default (sft/final).
+# Example: sbatch slurm_rl_gautschi.sh $SCRATCH/stepforge/checkpoints/sft/checkpoint-2465
+SFT_CKPT_ARG=""
+if [ -n "${1:-}" ]; then
+    SFT_CKPT_ARG="--sft-checkpoint $1"
+    echo "Using SFT checkpoint: $1"
+fi
+
 torchrun \
     --standalone \
     --nproc_per_node=8 \
     training/rl_train.py \
-        --config configs/config_gautschi.yaml &
+        --config configs/config_gautschi.yaml \
+        $SFT_CKPT_ARG &
 
 # Wait in the background so the SIGUSR1 trap can fire
 wait $!
