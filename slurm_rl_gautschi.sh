@@ -27,7 +27,8 @@
 #SBATCH --cpus-per-task=14          # 112 CPUs / 8 GPUs = 14 CPUs per task
 #SBATCH --mem=800G                  # ~100 GB per GPU process; well within 1 TB
 #SBATCH --gres=gpu:8                # full node: 8× H100 80GB
-#SBATCH --partition=gpu             # check available partitions: slist
+#SBATCH --partition=ai
+#SBATCH --account=lilly-agentic-gpu
 #SBATCH --requeue                   # allow requeue on preemption or time limit
 #SBATCH --signal=B:SIGUSR1@120      # warn 120 s before wall-time so we can resubmit
 # #SBATCH --account=YOUR_ACCOUNT   # uncomment and set if your allocation requires it
@@ -54,16 +55,14 @@ export KMP_DUPLICATE_LIB_OK=TRUE
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# ── WandB ─────────────────────────────────────────────────────────────────────
-export WANDB_PROJECT="stepforge"
-export WANDB_RUN_NAME="rl-${SLURM_JOB_ID}"    # unique name per job for side-by-side comparison
-# WANDB_API_KEY must be set in your environment before submitting, or run `wandb login` first
-export WANDB_API_KEY="${WANDB_API_KEY:?Set WANDB_API_KEY or run: wandb login}"
-
 # NCCL tuning for H100 NVLink interconnect
 export NCCL_DEBUG=WARN
 export NCCL_IB_DISABLE=0            # keep InfiniBand enabled if available
 export NCCL_SOCKET_IFNAME=^lo,docker
+
+# ── Dependency pins (self-healing) ───────────────────────────────────────────
+pip install -q "trl==0.13.1" "transformers==4.51.3"
+pip uninstall -q torchao -y 2>/dev/null || true
 
 # ── Ensure output directories exist ──────────────────────────────────────────
 mkdir -p "$SCRATCH/stepforge/logs"
