@@ -60,6 +60,10 @@ export NCCL_DEBUG=WARN
 export NCCL_IB_DISABLE=0            # keep InfiniBand enabled if available
 export NCCL_SOCKET_IFNAME=^lo,docker
 
+# ── Dependency pins (self-healing) ───────────────────────────────────────────
+pip install -q "trl==0.13.1" "transformers==4.51.3"
+pip uninstall -q torchao -y 2>/dev/null || true
+
 # ── Ensure output directories exist ──────────────────────────────────────────
 mkdir -p "$SCRATCH/stepforge/logs"
 mkdir -p "$SCRATCH/stepforge/checkpoints/rl"

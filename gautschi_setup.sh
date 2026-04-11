@@ -7,16 +7,17 @@
 #
 # What this script does:
 #   1. Creates the conda environment with pythonocc-core (conda-forge only)
-#   2. Installs all pip packages (unsloth, trl, transformers, etc.)
+#   2. Installs all pip packages with pinned compatible versions
 #   3. Downloads the Text2CAD dataset to $SCRATCH
 #   4. Creates all required output directories on $SCRATCH
 #
-# Notes:
-#   - pythonocc-core MUST come from conda-forge (not pip) — OCC API is version-
-#     sensitive and the conda package matches what Text2CAD was built against.
-#   - Unsloth is single-GPU only; it is used for SFT. RL uses standard HF.
-#   - Check available modules with: module spider cuda
-#                                   module spider anaconda
+# Key version constraints:
+#   - torch==2.5.1+cu121  (cu121 wheel = CUDA 12.x compatible)
+#   - trl==0.13.1         (has GRPOTrainer; >=0.14 imports FSDPModule→torch>=2.6)
+#   - transformers==4.51.3 (unsloth_zoo compatible)
+#   - torchao must be ABSENT (pulls in torch.int1 which doesn't exist in 2.5.1)
+#   - pythonocc-core==7.7.2 must come from conda-forge (not pip)
+#   - unsloth_zoo requires trl<=0.24.0 — 0.13.1 satisfies
 # =============================================================================
 
 set -euo pipefail
@@ -40,8 +41,6 @@ if [ -z "$SCRATCH" ]; then
 fi
 
 # ── 1. Load modules ──────────────────────────────────────────────────────────
-# Verify available versions with: module spider anaconda
-#                                  module spider cuda
 echo "[1/5] Loading modules..."
 module purge
 module load anaconda/2024.10-py312
@@ -70,41 +69,53 @@ conda install -y -c conda-forge pythonocc-core=7.7.2
 # ── 3. Install pip packages ──────────────────────────────────────────────────
 echo "[3/5] Installing pip packages..."
 
-# PyTorch — install wheel matching CUDA 12.2 on the system
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# PyTorch 2.5.1 — CUDA 12.1 wheel works with CUDA 12.6 runtime
+pip install \
+    "torch==2.5.1" \
+    "torchvision==0.20.1" \
+    "torchaudio==2.5.1" \
+    --index-url https://download.pytorch.org/whl/cu121
 
-# Unsloth (SFT only — requires specific torch/CUDA combo)
+# Unsloth (SFT only — single-GPU, requires torch 2.5.x)
 pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
 
-# Flash Attention 2 (H100 native; speeds up long-context SFT/RL)
-pip install flash-attn --no-build-isolation
+# Flash Attention 2 — must build against installed torch/CUDA
+# Use pre-built wheel to avoid cross-device link error on Gautschi scratch
+mkdir -p "$SCRATCH/tmp"
+FLASH_WHL="flash_attn-2.8.3+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"
+if [ ! -f "$SCRATCH/tmp/$FLASH_WHL" ]; then
+    wget -q "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/$FLASH_WHL" \
+        -P "$SCRATCH/tmp/"
+fi
+pip install "$SCRATCH/tmp/$FLASH_WHL"
 
-# Core training stack
-# trl==0.14.3: has GRPOTrainer (added in 0.13.0), no FSDPModule requirement (added in 0.15+)
-# unsloth_zoo requires trl<=0.24.0 — 0.14.3 satisfies all constraints
+# Core training stack — pinned for torch 2.5.1 compatibility
+# trl==0.13.1: has GRPOTrainer; >=0.14 imports FSDPModule which needs torch>=2.6
+# unsloth_zoo requires trl<=0.24.0 — 0.13.1 satisfies
 pip install \
-    "trl==0.14.3" \
-    "transformers>=4.51.3" \
+    "trl==0.13.1" \
+    "transformers==4.51.3" \
     "peft>=0.10" \
     "accelerate>=0.30" \
     "datasets" \
     "bitsandbytes"
 
-# torchao conflicts with torch 2.5.1 (needs torch>=2.6 for torch.int1)
-# It gets pulled in by newer transformers — uninstall it explicitly
+# torchao gets pulled in by newer transformers but requires torch.int1 (torch>=2.6)
+# Must uninstall AFTER transformers to ensure it's gone
 pip uninstall torchao -y 2>/dev/null || true
 
-# Retrieval, reward, and utility (matches runpod_setup.sh)
+# Text2CAD CadSeqProc dependencies
 pip install \
-    "open3d" \
     "trimesh==4.1.8" \
     "plyfile==0.9" \
     "pyvista" \
-    "rich" \
     "prettytable" \
     "nltk" \
-    "python-dotenv" \
-    "pillow" \
+    "python-dotenv"
+
+# Retrieval, reward, and utility
+pip install \
+    "open3d" \
     "sentence-transformers" \
     "faiss-cpu" \
     "scipy" \
@@ -113,6 +124,8 @@ pip install \
     "omegaconf" \
     "tqdm" \
     "gradio" \
+    "rich" \
+    "pillow" \
     "huggingface_hub"
 
 echo "  All pip packages installed."
@@ -123,7 +136,6 @@ echo "[4/5] Downloading Text2CAD dataset to \$SCRATCH..."
 DATA_DIR="$SCRATCH/data"
 mkdir -p "$DATA_DIR"
 
-# HuggingFace download
 if [ -n "$HF_TOKEN" ]; then
     export HUGGINGFACE_TOKEN="$HF_TOKEN"
     export HF_TOKEN="$HF_TOKEN"
@@ -135,22 +147,18 @@ from huggingface_hub import hf_hub_download
 
 DATA_DIR = "$DATA_DIR"
 TOKEN = os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
+tmp_dir = f"{DATA_DIR}/.hf_tmp"
+os.makedirs(tmp_dir, exist_ok=True)
 
-# Repo: SadilKhan/Text2CAD  (HuggingFace dataset)
-# Files: text2cad_v1.1/ subfolder for CSV/JSON, cad_seq.zip at root
 files = [
     ("text2cad_v1.1/text2cad_v1.1.csv",  f"{DATA_DIR}/text2cad_v1.1.csv"),
     ("text2cad_v1.1/train_test_val.json", f"{DATA_DIR}/train_test_val.json"),
     ("cad_seq.zip",                        f"{DATA_DIR}/cad_seq.zip"),
 ]
-tmp_dir = f"{DATA_DIR}/.hf_tmp"
-os.makedirs(tmp_dir, exist_ok=True)
-
 for hf_fname, dest in files:
     if os.path.exists(dest):
         print(f"  already present: {dest}")
         continue
-    # Skip cad_seq.zip if already extracted
     if hf_fname == "cad_seq.zip" and os.path.isdir(f"{DATA_DIR}/cad_seq"):
         print(f"  cad_seq/ already extracted — skipping zip download")
         continue
@@ -168,17 +176,16 @@ for hf_fname, dest in files:
 shutil.rmtree(tmp_dir, ignore_errors=True)
 PYEOF
 
-# Extract cad_seq.zip if needed
 if [ -f "$DATA_DIR/cad_seq.zip" ] && [ ! -d "$DATA_DIR/cad_seq" ]; then
-    echo "  Extracting cad_seq.zip (this takes a while)..."
-    unzip -q "$DATA_DIR/cad_seq.zip" -d "$DATA_DIR/"
+    echo "  Extracting cad_seq.zip..."
+    unzip -qo "$DATA_DIR/cad_seq.zip" -d "$DATA_DIR/"
     echo "  Extraction complete."
 fi
 
 # Clone Text2CAD source (for CadSeqProc)
 if [ ! -d "$DATA_DIR/Text2CAD" ]; then
     echo "  Cloning Text2CAD source..."
-    git clone https://github.com/SadilKhan/Text2CAD.git "$DATA_DIR/Text2CAD"
+    git clone --depth=1 https://github.com/SadilKhan/Text2CAD.git "$DATA_DIR/Text2CAD"
 else
     echo "  Text2CAD source already present — skipping."
 fi
@@ -193,7 +200,8 @@ mkdir -p \
     "$STEPFORGE_SCRATCH/checkpoints/sft" \
     "$STEPFORGE_SCRATCH/checkpoints/rl" \
     "$STEPFORGE_SCRATCH/logs" \
-    "$SCRATCH/.hf-cache"
+    "$SCRATCH/.hf-cache" \
+    "$SCRATCH/tmp"
 
 echo "  Directories created under $STEPFORGE_SCRATCH"
 
@@ -203,15 +211,8 @@ echo "============================================================"
 echo " Setup complete!"
 echo ""
 echo " NEXT STEPS:"
-echo "   1. Run the data pipeline (on a CPU node or interactively):"
-echo "        conda activate $CONDA_ENV_NAME"
-echo "        cd $PROJECT_DIR"
-echo "        python data/export_steps.py --config configs/config_gautschi.yaml"
-echo "        python data/pair_captions.py --config configs/config_gautschi.yaml"
-echo "        python data/dfs_reserializer.py --config configs/config_gautschi.yaml"
-echo "        python data/filter_dataset.py --config configs/config_gautschi.yaml"
-echo "        python retrieval/build_index.py --config configs/config_gautschi.yaml"
-echo "        python data/precompute_rag.py --config configs/config_gautschi.yaml"
+echo "   1. Run the data pipeline:"
+echo "        sbatch slurm_data_gautschi.sh"
 echo ""
 echo "   2. Submit SFT job:"
 echo "        sbatch slurm_sft_gautschi.sh"

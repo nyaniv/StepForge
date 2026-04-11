@@ -43,9 +43,9 @@ export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # ── Dependency pins (self-healing) ───────────────────────────────────────────
-# trl==0.14.3: has GRPOTrainer; newer versions need FSDPModule from torch>=2.6
-pip install -q "trl==0.14.3" 2>/dev/null || true
-# torchao conflicts with torch 2.5.1 (torch.int1 missing)
+# trl==0.13.1: has GRPOTrainer; >=0.14 imports FSDPModule which needs torch>=2.6
+pip install -q "trl==0.13.1" "transformers==4.51.3"
+# torchao conflicts with torch 2.5.1 (torch.int1 missing); uninstall after transformers
 pip uninstall -q torchao -y 2>/dev/null || true
 
 # ── Ensure output directories exist ──────────────────────────────────────────
