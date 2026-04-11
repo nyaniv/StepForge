@@ -404,7 +404,7 @@ from unsloth import is_bfloat16_supported
 # This replicates the paper's setup: loss is computed only on the STEP output,
 # not on the system prompt or caption. It works with custom prompt formats
 # (unlike Unsloth's train_on_responses_only which uses token-ID matching).
-_response_template = "\n### output:\n"
+_response_template = "### output:\n"
 _collator = DataCollatorForCompletionOnlyLM(
     response_template=_response_template,
     tokenizer=tokenizer,
