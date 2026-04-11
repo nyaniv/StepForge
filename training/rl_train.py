@@ -172,6 +172,12 @@ def build_rl_dataset(train_json: str, retriever: Retriever,
         if i % 5000 == 0:
             logger.info(f"  Building RL dataset: {i}/{len(records)} (kept={len(data)}, skipped={skipped})")
         gt_step = record.get("output") or record.get("step") or ""
+        if not gt_step:
+            raise RuntimeError(
+                f"Record {i} has empty ground truth step (both 'output' and 'step' are missing/empty). "
+                f"Record uid: {record.get('uid') or record.get('id_original', '?')}. "
+                f"Fix the data pipeline before running RL."
+            )
         # Pre-filter by char length to avoid tokenizing huge files
         if len(gt_step) > char_limit:
             skipped += 1
@@ -183,6 +189,11 @@ def build_rl_dataset(train_json: str, retriever: Retriever,
         uid = record.get("uid") or record.get("id_original") or ""
         retrieved = retriever.retrieve(record["caption"], exclude_uid=uid)
         retrieved_step = retrieved.get("output") or retrieved.get("step") or ""
+        if not retrieved_step:
+            raise RuntimeError(
+                f"Retriever returned empty step for record {i} (uid={uid!r}, caption={record['caption'][:80]!r}). "
+                f"Check that the FAISS index is built and cfg.paths.faiss_index_path is correct."
+            )
         prompt = format_prompt(record["caption"], retrieved_step, tokenizer)
         data.append({
             "prompt": prompt,
@@ -193,6 +204,12 @@ def build_rl_dataset(train_json: str, retriever: Retriever,
         f"RL dataset: {len(data)} examples kept, {skipped} skipped "
         f"(GT step > {max_completion_length} tokens)"
     )
+    if len(data) == 0:
+        raise RuntimeError(
+            f"RL dataset is empty after filtering. All {skipped} records had GT steps "
+            f"exceeding max_completion_length={max_completion_length} tokens. "
+            f"Increase cfg.rl.max_completion_length or reduce the entity cap."
+        )
     return Dataset.from_list(data)
 
 
