@@ -486,7 +486,7 @@ trainer = SFTTrainer(
         lr_scheduler_type="linear",
         seed=3407,
         output_dir=OUTPUT_DIR,
-        report_to="tensorboard",
+        report_to="none",
         save_strategy="epoch",
         eval_strategy="epoch",
     ),
