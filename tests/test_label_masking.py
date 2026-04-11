@@ -21,6 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 parser = argparse.ArgumentParser()
 parser.add_argument("--config", default="configs/config_gautschi.yaml")
 parser.add_argument("--n", type=int, default=8, help="Number of examples to test")
+parser.add_argument("--tokenizer_path", default=None,
+                    help="Local path to tokenizer (overrides config; use when HF auth unavailable)")
 args = parser.parse_args()
 
 from omegaconf import OmegaConf
@@ -30,21 +32,12 @@ from transformers import AutoTokenizer, DataCollatorForSeq2Seq
 from datasets import Dataset
 import torch
 
-print(f"Loading tokenizer from {cfg.model.base_model} ...")
-# Check local HF cache first — avoids gated-repo auth issues on login nodes.
-# Unsloth downloads models into hub/models--unsloth--<name>, not models--meta-llama--<name>.
-import glob as _glob
-_hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-_candidates = []
-for _slug in (cfg.model.base_model.replace("/", "--"),
-              "unsloth--" + cfg.model.base_model.split("/")[-1]):
-    _snaps = sorted(_glob.glob(
-        os.path.join(_hf_home, "hub", f"models--{_slug}", "snapshots", "*")
-    ), reverse=True)
-    _candidates.extend(_snaps)
-_local_path = _candidates[0] if _candidates else cfg.model.base_model
-print(f"  Using path: {_local_path}")
-tokenizer = AutoTokenizer.from_pretrained(_local_path, local_files_only=bool(_candidates))
+_tok_path = args.tokenizer_path or cfg.model.base_model
+print(f"Loading tokenizer from: {_tok_path}")
+tokenizer = AutoTokenizer.from_pretrained(
+    _tok_path,
+    local_files_only=args.tokenizer_path is not None,
+)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 print(f"  Vocab size: {tokenizer.vocab_size}  |  pad_token_id: {tokenizer.pad_token_id}")
