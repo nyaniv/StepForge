@@ -66,7 +66,7 @@ echo "========================================"
 cd "${HOME}/StepForge"
 
 echo "[1/6] Exporting STEP files..."
-python data/export_steps.py --config configs/config_gautschi.yaml --workers 64
+python data/export_steps.py --config configs/config_gautschi.yaml --workers 8
 
 echo "[2/6] Pairing captions..."
 python data/pair_captions.py --config configs/config_gautschi.yaml
