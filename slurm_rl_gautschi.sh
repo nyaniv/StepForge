@@ -61,8 +61,10 @@ export NCCL_IB_DISABLE=0            # keep InfiniBand enabled if available
 export NCCL_SOCKET_IFNAME=^lo,docker
 
 # ── Dependency pins (self-healing) ───────────────────────────────────────────
-pip install -q "trl==0.13.1" "transformers==4.51.3"
+pip install -q "trl==0.14.0" "transformers==4.51.3"
 pip uninstall -q torchao -y 2>/dev/null || true
+TRL_UTILS=$(python -c "import trl,os; print(os.path.join(os.path.dirname(trl.__file__),'models','utils.py'))")
+sed -i 's/^from torch.distributed.fsdp import FSDPModule$/try:\n    from torch.distributed.fsdp import FSDPModule\nexcept ImportError:\n    FSDPModule = None/' "$TRL_UTILS" 2>/dev/null || true
 
 # ── Ensure output directories exist ──────────────────────────────────────────
 mkdir -p "$SCRATCH/stepforge/logs"
