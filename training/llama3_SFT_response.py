@@ -396,20 +396,10 @@ class VerboseEpochCallback(TrainerCallback):
 
 
 # ── Training ─────────────────────────────────────────────────────────────────────
-from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
-from transformers import TrainingArguments
+from trl import SFTTrainer
+from transformers import TrainingArguments, DataCollatorForSeq2Seq
 from unsloth import is_bfloat16_supported
-
-# Use TRL's DataCollatorForCompletionOnlyLM to train on response tokens only.
-# This replicates the paper's setup: loss is computed only on the STEP output,
-# not on the system prompt or caption. It works with custom prompt formats
-# (unlike Unsloth's train_on_responses_only which uses token-ID matching).
-_response_template = "### output:\n"
-_collator = DataCollatorForCompletionOnlyLM(
-    response_template=_response_template,
-    tokenizer=tokenizer,
-)
-logger.info(f"Using DataCollatorForCompletionOnlyLM with response_template={_response_template!r}")
+from unsloth.chat_templates import train_on_responses_only
 
 logger.info("Building SFTTrainer...")
 logger.info(f"  epochs={_cfg.sft.num_epochs}  lr={_cfg.sft.learning_rate}  "
@@ -422,7 +412,7 @@ trainer = SFTTrainer(
     eval_dataset=test_dataset,
     dataset_text_field="text",
     max_seq_length=max_seq_length,
-    data_collator=_collator,
+    data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer),
     dataset_num_proc=2,
     packing=False,
     args=TrainingArguments(
@@ -445,6 +435,28 @@ trainer = SFTTrainer(
     ),
     callbacks=[VerboseEpochCallback()],
 )
+
+# Mask prompt tokens — train only on the STEP output after "### output:\n".
+# Token IDs [14711, 2612, 512] verified present in real examples (Gautschi, 2026-04-11).
+trainer = train_on_responses_only(
+    trainer,
+    instruction_part="### caption:\n",
+    response_part="### output:\n",
+)
+
+# Verify masking worked on first 4 examples before wasting GPU time.
+logger.info("Checking label masking on first 4 examples...")
+_n_all_masked = 0
+for i in range(min(4, len(trainer.train_dataset))):
+    labels = trainer.train_dataset[i].get("labels", [])
+    unmasked = sum(1 for l in labels if l != -100)
+    if unmasked == 0:
+        _n_all_masked += 1
+        logger.error(f"  Example {i}: ALL labels masked — response_part not found!")
+    else:
+        logger.info(f"  Example {i}: {unmasked}/{len(labels)} tokens unmasked ({100*unmasked/len(labels):.1f}%)")
+if _n_all_masked > 0:
+    raise RuntimeError(f"Label masking broken: {_n_all_masked}/4 examples fully masked. Aborting.")
 
 logger.info("Starting SFT training...")
 _train_start = time.time()
