@@ -169,7 +169,6 @@ def formatting_prompts_func(examples):
                 logger.warning(f"[fmt] Missing output at index {_fmt_stats['total']}")
             if not input_:
                 _fmt_stats["missing_retrieved"] += 1
-                logger.warning(f"[fmt] Missing retrieved_step at index {_fmt_stats['total']}")
 
             # Truncate retrieved STEP to MAX_RETRIEVED_TOKENS.
             # See comment above MAX_RETRIEVED_TOKENS for rationale.
