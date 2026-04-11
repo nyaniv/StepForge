@@ -88,17 +88,26 @@ pip install \
     "datasets" \
     "bitsandbytes"
 
-# Retrieval, reward, and utility
+# Retrieval, reward, and utility (matches runpod_setup.sh)
 pip install \
+    "open3d" \
+    "trimesh==4.1.8" \
+    "plyfile==0.9" \
+    "pyvista" \
+    "rich" \
+    "prettytable" \
+    "nltk" \
+    "python-dotenv" \
+    "pillow" \
     "sentence-transformers" \
     "faiss-cpu" \
-    "open3d" \
     "scipy" \
     "pandas" \
     "loguru" \
     "omegaconf" \
     "tqdm" \
-    "gradio"
+    "gradio" \
+    "huggingface_hub"
 
 echo "  All pip packages installed."
 
