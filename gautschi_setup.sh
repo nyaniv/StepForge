@@ -76,9 +76,6 @@ pip install \
     "torchaudio==2.5.1" \
     --index-url https://download.pytorch.org/whl/cu121
 
-# Unsloth (SFT only — single-GPU, requires torch 2.5.x)
-pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
-
 # Flash Attention 2 — must build against installed torch/CUDA
 # Use pre-built wheel to avoid cross-device link error on Gautschi scratch
 mkdir -p "$SCRATCH/tmp"

@@ -47,7 +47,7 @@ max_seq_length = cfg.model.max_seq_length
 MAX_RETRIEVED_TOKENS = int(
     cfg.sft.get("max_retrieved_tokens", None)
     or getattr(cfg.model, "max_retrieved_tokens", None)
-    or 4500
+    or max_seq_length  # no truncation beyond context window (paper spec)
 )
 
 _ASSISTANT_HEADER_IDS = [128006, 78191, 128007, 271]
