@@ -419,7 +419,7 @@ wandb.init(
 # not on the system prompt or caption. It works with custom prompt formats
 # (unlike Unsloth's train_on_responses_only which uses token-ID matching and
 # removes all samples when the marker isn't found).
-_response_template = "\n### output:\n"
+_response_template = "### output:\n"
 _collator = DataCollatorForCompletionOnlyLM(
     response_template=_response_template,
     tokenizer=tokenizer,
