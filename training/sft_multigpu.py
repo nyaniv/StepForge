@@ -65,6 +65,8 @@ parser = argparse.ArgumentParser(description="STEP-LLM SFT (multi-GPU)")
 parser.add_argument("--config", default="configs/config_gautschi.yaml")
 parser.add_argument("--output-dir", default=None,
                     help="Override cfg.paths.sft_checkpoint_dir (used by SLURM for job-namespaced runs)")
+parser.add_argument("--per-device-batch", type=int, default=None,
+                    help="Override cfg.sft.per_device_train_batch_size (e.g. 4 for 4-GPU runs)")
 args, _ = parser.parse_known_args()
 
 cfg_path = args.config if os.path.isabs(args.config) else os.path.join(
@@ -462,8 +464,8 @@ class LossLoggerCallback(TrainerCallback):
 # ── Training ──────────────────────────────────────────────────────────────────
 # Effective batch = per_device × grad_accum × world_size
 # Paper: batch=16. With 8 GPUs: per_device=2, grad_accum=1 → 2×1×8=16 ✓
-per_device_batch = cfg.sft.per_device_train_batch_size  # 2
-grad_accum       = cfg.sft.gradient_accumulation_steps   # 1 for multi-GPU (paper match)
+per_device_batch = args.per_device_batch or cfg.sft.per_device_train_batch_size
+grad_accum       = cfg.sft.gradient_accumulation_steps
 effective_batch  = per_device_batch * grad_accum * world_size
 
 if is_rank0:
