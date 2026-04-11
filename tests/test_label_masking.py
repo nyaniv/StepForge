@@ -31,7 +31,20 @@ from datasets import Dataset
 import torch
 
 print(f"Loading tokenizer from {cfg.model.base_model} ...")
-tokenizer = AutoTokenizer.from_pretrained(cfg.model.base_model)
+# Check local HF cache first — avoids gated-repo auth issues on login nodes.
+# Unsloth downloads models into hub/models--unsloth--<name>, not models--meta-llama--<name>.
+import glob as _glob
+_hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+_candidates = []
+for _slug in (cfg.model.base_model.replace("/", "--"),
+              "unsloth--" + cfg.model.base_model.split("/")[-1]):
+    _snaps = sorted(_glob.glob(
+        os.path.join(_hf_home, "hub", f"models--{_slug}", "snapshots", "*")
+    ), reverse=True)
+    _candidates.extend(_snaps)
+_local_path = _candidates[0] if _candidates else cfg.model.base_model
+print(f"  Using path: {_local_path}")
+tokenizer = AutoTokenizer.from_pretrained(_local_path, local_files_only=bool(_candidates))
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 print(f"  Vocab size: {tokenizer.vocab_size}  |  pad_token_id: {tokenizer.pad_token_id}")
