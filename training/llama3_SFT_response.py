@@ -152,7 +152,7 @@ def formatting_prompts_func(examples):
     texts = []
 
     if USE_RAG:
-        inputs = examples["retrieved_step"]
+        inputs = examples.get("retrieved_step", [""] * len(instructions))
         for instruction, input_, output in zip(instructions, inputs, outputs):
             _fmt_stats["total"] += 1
 
