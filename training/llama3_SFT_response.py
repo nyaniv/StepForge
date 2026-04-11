@@ -116,12 +116,26 @@ logger.info(f"LoRA config: r={_cfg.model.lora_r}, alpha={_cfg.model.lora_alpha}"
 model.print_trainable_parameters()
 
 # ── Prompt templates ────────────────────────────────────────────────────────────
-# Uses Llama's chat template (apply_chat_template) so that train_on_responses_only
-# can use the special header tokens <|start_header_id|>assistant<|end_header_id|>
-# which always tokenize to the same IDs regardless of surrounding context.
-# Custom "### output:\n" strings fail because BPE context affects their token IDs.
+# Uses Llama's chat template (apply_chat_template). Label masking is done manually
+# in formatting_prompts_func by searching for _ASSISTANT_HEADER_IDS in input_ids.
+# train_on_responses_only is NOT used — broken in Unsloth 2026.4.4 (removes all
+# samples even when special tokens are present in the tokenized sequence).
 
-PROMPT_VERSION = "chat_template_v1"  # bump this if you change the user message format
+PROMPT_VERSION = "manual_mask_v1"  # bump this if you change the user message format
+
+# Fixed token IDs for <|start_header_id|>assistant<|end_header_id|>\n\n
+# These are special tokens with stable IDs regardless of surrounding context.
+_ASSISTANT_HEADER_IDS = [128006, 78191, 128007, 271]
+_ASSISTANT_HEADER_LEN = len(_ASSISTANT_HEADER_IDS)
+
+
+def _find_response_start(input_ids: list) -> int:
+    """Return the index of the first response token (after assistant header), or -1."""
+    for i in range(len(input_ids) - _ASSISTANT_HEADER_LEN + 1):
+        if input_ids[i:i + _ASSISTANT_HEADER_LEN] == _ASSISTANT_HEADER_IDS:
+            return i + _ASSISTANT_HEADER_LEN
+    return -1
+
 
 def _build_user_message(instruction: str, retrieved: str, use_rag: bool) -> str:
     if use_rag:
@@ -153,57 +167,95 @@ _fmt_stats = {
 
 
 def formatting_prompts_func(examples):
-    """Format dataset examples into the training prompt using the chat template."""
+    """
+    Format examples into chat template, tokenize, and manually build labels.
+
+    Labels are -100 for the instruction (user message + assistant header) and
+    real token IDs for the response. This bypasses train_on_responses_only which
+    is broken in Unsloth 2026.4.4 — it removes all samples even when the special
+    header tokens are present in the tokenized sequence.
+    """
     instructions = examples["caption"]
     outputs = examples["step"]
-    texts = []
+
+    all_input_ids = []
+    all_attention_masks = []
+    all_labels = []
+    all_texts = []  # kept for debugging/logging only
+
+    def _process_one(instruction, output, retrieved):
+        _fmt_stats["total"] += 1
+
+        if not instruction:
+            _fmt_stats["missing_caption"] += 1
+            logger.warning(f"[fmt] Missing caption at index {_fmt_stats['total']}")
+        if not output:
+            _fmt_stats["missing_output"] += 1
+            logger.warning(f"[fmt] Missing output at index {_fmt_stats['total']}")
+        if retrieved is not None and not retrieved:
+            _fmt_stats["missing_retrieved"] += 1
+
+        if retrieved is not None:
+            # Truncate retrieved STEP to MAX_RETRIEVED_TOKENS.
+            ids = tokenizer(retrieved or "", add_special_tokens=False)["input_ids"]
+            if len(ids) > MAX_RETRIEVED_TOKENS:
+                _fmt_stats["truncated"] += 1
+                _fmt_stats["truncation_lengths"].append(len(ids))
+                retrieved = tokenizer.decode(ids[:MAX_RETRIEVED_TOKENS])
+            use_retrieved = retrieved or ""
+        else:
+            use_retrieved = None
+
+        messages = [
+            {"role": "user",      "content": _build_user_message(instruction or "", use_retrieved or "", use_retrieved is not None)},
+            {"role": "assistant", "content": output or ""},
+        ]
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+
+        encoded = tokenizer(
+            text,
+            truncation=True,
+            max_length=max_seq_length,
+            add_special_tokens=False,  # chat template already adds them
+        )
+        input_ids = encoded["input_ids"]
+        attention_mask = encoded["attention_mask"]
+
+        response_start = _find_response_start(input_ids)
+        if response_start == -1:
+            logger.error(
+                f"[fmt] Assistant header tokens not found in tokenized sequence "
+                f"(len={len(input_ids)}). Example will be fully masked (labels=-100)."
+            )
+            labels = [-100] * len(input_ids)
+        else:
+            labels = [-100] * response_start + input_ids[response_start:]
+
+        _fmt_stats["seq_lengths"].append(len(input_ids))
+        return input_ids, attention_mask, labels, text
 
     if USE_RAG:
         inputs = examples.get("retrieved_step", [""] * len(instructions))
         for instruction, input_, output in zip(instructions, inputs, outputs):
-            _fmt_stats["total"] += 1
-
-            if not instruction:
-                _fmt_stats["missing_caption"] += 1
-                logger.warning(f"[fmt] Missing caption at index {_fmt_stats['total']}")
-            if not output:
-                _fmt_stats["missing_output"] += 1
-                logger.warning(f"[fmt] Missing output at index {_fmt_stats['total']}")
-            if not input_:
-                _fmt_stats["missing_retrieved"] += 1
-
-            # Truncate retrieved STEP to MAX_RETRIEVED_TOKENS.
-            ids = tokenizer(input_ or "", add_special_tokens=False)["input_ids"]
-            if len(ids) > MAX_RETRIEVED_TOKENS:
-                _fmt_stats["truncated"] += 1
-                _fmt_stats["truncation_lengths"].append(len(ids))
-                truncated = tokenizer.decode(ids[:MAX_RETRIEVED_TOKENS])
-            else:
-                truncated = input_ or ""
-
-            messages = [
-                {"role": "user",      "content": _build_user_message(instruction or "", truncated, True)},
-                {"role": "assistant", "content": output or ""},
-            ]
-            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-            texts.append(text)
-
-            seq_ids = tokenizer(text, add_special_tokens=False)["input_ids"]
-            _fmt_stats["seq_lengths"].append(len(seq_ids))
-
+            iids, amask, lbls, txt = _process_one(instruction, output, input_)
+            all_input_ids.append(iids)
+            all_attention_masks.append(amask)
+            all_labels.append(lbls)
+            all_texts.append(txt)
     else:
         for instruction, output in zip(instructions, outputs):
-            _fmt_stats["total"] += 1
-            messages = [
-                {"role": "user",      "content": _build_user_message(instruction, "", False)},
-                {"role": "assistant", "content": output},
-            ]
-            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-            texts.append(text)
-            seq_ids = tokenizer(text, add_special_tokens=False)["input_ids"]
-            _fmt_stats["seq_lengths"].append(len(seq_ids))
+            iids, amask, lbls, txt = _process_one(instruction, output, None)
+            all_input_ids.append(iids)
+            all_attention_masks.append(amask)
+            all_labels.append(lbls)
+            all_texts.append(txt)
 
-    return {"text": texts}
+    return {
+        "input_ids":      all_input_ids,
+        "attention_mask": all_attention_masks,
+        "labels":         all_labels,
+        "text":           all_texts,  # retained for cache key / debugging
+    }
 
 
 def _log_fmt_stats(tag: str):
@@ -406,7 +458,6 @@ class VerboseEpochCallback(TrainerCallback):
 from trl import SFTTrainer
 from transformers import TrainingArguments, DataCollatorForSeq2Seq
 from unsloth import is_bfloat16_supported
-from unsloth.chat_templates import train_on_responses_only
 
 logger.info("Building SFTTrainer...")
 logger.info(f"  epochs={_cfg.sft.num_epochs}  lr={_cfg.sft.learning_rate}  "
@@ -417,7 +468,9 @@ trainer = SFTTrainer(
     tokenizer=tokenizer,
     train_dataset=dataset,
     eval_dataset=test_dataset,
-    dataset_text_field="text",
+    # No dataset_text_field — dataset already has input_ids/attention_mask/labels
+    # from manual masking in formatting_prompts_func. train_on_responses_only is
+    # NOT called — it is broken in Unsloth 2026.4.4 and removes all samples.
     max_seq_length=max_seq_length,
     data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer),
     dataset_num_proc=2,
@@ -443,36 +496,36 @@ trainer = SFTTrainer(
     callbacks=[VerboseEpochCallback()],
 )
 
-# Use Llama's special header tokens — context-independent (fixed IDs) unlike
-# custom strings like "### output:\n" whose BPE tokens shift with surrounding context.
-trainer = train_on_responses_only(
-    trainer,
-    instruction_part="<|start_header_id|>user<|end_header_id|>\n\n",
-    response_part="<|start_header_id|>assistant<|end_header_id|>\n\n",
-)
-
-# Verify masking worked — Unsloth silently removes all-masked samples before this check,
-# so check train_dataset size first.
-logger.info("Checking label masking on first 4 examples...")
-if len(trainer.train_dataset) == 0:
-    raise RuntimeError(
-        "train_dataset is empty after train_on_responses_only. "
-        "Unsloth removed all samples (all labels were -100). "
-        "The response_part was not found in any example. "
-        "Check that response_part='### output:\\n' appears in the formatted text "
-        "and that the formatted dataset cache is not stale."
-    )
+# ── Label masking sanity check ───────────────────────────────────────────────────
+# Labels are pre-computed in formatting_prompts_func (manual masking — no
+# train_on_responses_only). Verify a sample of examples have non-trivial response tokens.
+logger.info("Checking manual label masking on first 8 examples...")
 _n_all_masked = 0
-for i in range(min(4, len(trainer.train_dataset))):
-    labels = trainer.train_dataset[i].get("labels", [])
-    unmasked = sum(1 for l in labels if l != -100)
-    if unmasked == 0:
-        _n_all_masked += 1
-        logger.error(f"  Example {i}: ALL labels masked — response_part not found!")
-    else:
-        logger.info(f"  Example {i}: {unmasked}/{len(labels)} tokens unmasked ({100*unmasked/len(labels):.1f}%)")
+_n_checked = 0
+for i in range(min(8, len(dataset))):
+    ex = dataset[i]
+    labels = ex.get("labels", [])
+    if labels:
+        _n_checked += 1
+        unmasked = sum(1 for l in labels if l != -100)
+        total_l = len(labels)
+        if unmasked == 0:
+            _n_all_masked += 1
+            logger.error(
+                f"  Example {i}: ALL {total_l} labels are -100 — "
+                f"assistant header tokens not found. Check _ASSISTANT_HEADER_IDS."
+            )
+        else:
+            logger.info(f"  Example {i}: {unmasked}/{total_l} label tokens unmasked ({100*unmasked/total_l:.1f}%)")
+
 if _n_all_masked > 0:
-    raise RuntimeError(f"Label masking broken: {_n_all_masked}/4 examples fully masked. Aborting.")
+    raise RuntimeError(
+        f"CRITICAL: {_n_all_masked}/{_n_checked} checked examples have all-masked labels. "
+        f"_ASSISTANT_HEADER_IDS={_ASSISTANT_HEADER_IDS} not found in tokenized sequences."
+    )
+else:
+    logger.info("Manual label masking check passed — response tokens are unmasked.")
+# ── End label check ─────────────────────────────────────────────────────────────
 
 logger.info("Starting SFT training...")
 _train_start = time.time()
