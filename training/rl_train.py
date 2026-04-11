@@ -71,7 +71,7 @@ from reward.scd_reward import compute_reward, compute_parse_reward
 # SFT trains with apply_chat_template — RL must use the same format so the
 # model sees the same prompt structure it was trained on.
 
-MAX_RETRIEVED_TOKENS: int = 500  # overridden per-config below in main(); default matches RunPod/local configs
+MAX_RETRIEVED_TOKENS: int = 16384  # overridden per-config in main(); no truncation by default (paper spec)
 
 
 def _build_user_message(caption: str, retrieved_step: str) -> str:
@@ -229,7 +229,10 @@ def main():
 
     # ── Apply config-driven globals ──────────────────────────────────────────
     global MAX_RETRIEVED_TOKENS
-    MAX_RETRIEVED_TOKENS = int(getattr(cfg.model, "max_retrieved_tokens", 500))
+    # Paper does not truncate retrieved context. Fall back to max_seq_length so
+    # the only hard limit is the model's context window.
+    MAX_RETRIEVED_TOKENS = int(getattr(cfg.model, "max_retrieved_tokens",
+                                       getattr(cfg.model, "max_seq_length", 16384)))
 
     # ── Distributed context (set by torchrun on Gautschi) ───────────────────
     local_rank = int(os.environ.get("LOCAL_RANK", 0))

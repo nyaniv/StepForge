@@ -45,17 +45,15 @@ model:
   lora_alpha: 32
   lora_dropout: 0.0          # must be 0.0 — Unsloth kernel fusions break with non-zero dropout
   use_quantization: false    # 3B in bf16 = ~6 GB; H100 80GB has ample headroom, no quantization needed
-  # max_retrieved_tokens is NOT stated in the paper (paper does not truncate).
-  # CL-4: 16K context can hold prompt + ~10K retrieved + ~5K target without
-  # truncating either side; the previous 4096 was tighter than the 8K configs.
-  max_retrieved_tokens: 10000
+  # max_retrieved_tokens: not set — paper does not truncate retrieved context.
+  # Both SFT and RL scripts fall back to max_seq_length when this is absent.
 
 sft:
   # All values below are FROM THE PAPER (Section 4.1).
-  # Single H100 80GB with Unsloth (Unsloth is single-GPU only).
-  # Effective batch = per_device × grad_accum = 2 × 8 = 16  (paper: "effective batch size of 16")
+  # 8× H100 80GB via torchrun DDP (sft_multigpu.py).
+  # Effective batch = per_device × grad_accum × world_size = 2 × 1 × 8 = 16  (paper: "effective batch size of 16")
   per_device_train_batch_size: 2
-  gradient_accumulation_steps: 8
+  gradient_accumulation_steps: 1
   learning_rate: 2.0e-4      # paper Section 4.1: "learning rate of 2e-4"
   num_epochs: 10             # paper Section 4.1: "trained for 10 epochs"
   warmup_ratio: 0.05         # paper Section 4.1: "warm-up of 5% of the total training steps"

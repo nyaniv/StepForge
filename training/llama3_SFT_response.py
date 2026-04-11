@@ -41,8 +41,8 @@ _cfg_path = _args.config if os.path.isabs(_args.config) else os.path.join(
 _cfg = OmegaConf.load(_cfg_path)
 
 BASE_MODEL_PATH = _cfg.model.base_model                           # meta-llama/Llama-3.2-3B-Instruct
-TRAIN_JSON      = os.path.join(_cfg.paths.processed_dir, "train.json")
-TEST_JSON       = os.path.join(_cfg.paths.processed_dir, "test.json")
+TRAIN_JSON      = os.path.join(_cfg.paths.processed_dir, "train_with_rag.jsonl")
+TEST_JSON       = os.path.join(_cfg.paths.processed_dir, "test.jsonl")
 LORA_SAVE_PATH  = os.path.join(_cfg.paths.sft_checkpoint_dir, "final")
 OUTPUT_DIR      = _cfg.paths.sft_checkpoint_dir
 USE_RAG         = True
@@ -353,14 +353,14 @@ if (os.path.exists(_FORMATTED_TRAIN) and os.path.exists(_FORMATTED_TEST)
 else:
     logger.info(f"Loading train data from {TRAIN_JSON}")
     with open(TRAIN_JSON) as f:
-        train_records = json.load(f)
+        train_records = [json.loads(line) for line in f if line.strip()]
     dataset = Dataset.from_list(train_records)
     del train_records
     logger.info(f"  Raw train records: {len(dataset)}")
 
     logger.info(f"Loading test data from {TEST_JSON}")
     with open(TEST_JSON) as f:
-        test_records = json.load(f)
+        test_records = [json.loads(line) for line in f if line.strip()]
     test_dataset = Dataset.from_list(test_records)
     del test_records
     logger.info(f"  Raw test records:  {len(test_dataset)}")
@@ -529,7 +529,7 @@ trainer = SFTTrainer(
         lr_scheduler_type="linear",
         seed=3407,
         output_dir=OUTPUT_DIR,
-        report_to="none",  # tensorboard not installed on Gautschi
+        report_to="none",
         save_strategy="epoch",
         eval_strategy="epoch",
     ),

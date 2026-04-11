@@ -31,8 +31,6 @@ check("trl", lambda: __import__("trl"))
 check("trl.SFTTrainer", lambda: __import__("trl").SFTTrainer)
 check("trl.GRPOTrainer", lambda: __import__("trl").GRPOTrainer)
 check("trl.DataCollatorForCompletionOnlyLM", lambda: __import__("trl").DataCollatorForCompletionOnlyLM)
-check("unsloth", lambda: __import__("unsloth"))
-check("unsloth.FastLanguageModel", lambda: __import__("unsloth").FastLanguageModel)
 check("peft", lambda: __import__("peft"))
 check("datasets", lambda: __import__("datasets"))
 check("accelerate", lambda: __import__("accelerate"))
@@ -48,7 +46,7 @@ def check_version(pkg, attr="__version__"):
     print(f"       {pkg}=={ver}")
 
 print("\n  Versions:")
-for pkg in ["torch", "transformers", "trl", "peft", "accelerate", "datasets", "unsloth"]:
+for pkg in ["torch", "transformers", "trl", "peft", "accelerate", "datasets"]:
     try:
         check_version(pkg)
     except Exception as e:
