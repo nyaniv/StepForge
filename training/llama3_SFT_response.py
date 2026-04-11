@@ -41,8 +41,8 @@ _cfg_path = _args.config if os.path.isabs(_args.config) else os.path.join(
 _cfg = OmegaConf.load(_cfg_path)
 
 BASE_MODEL_PATH = _cfg.model.base_model                           # meta-llama/Llama-3.2-3B-Instruct
-TRAIN_JSON      = os.path.join(_cfg.paths.processed_dir, "train_with_rag.jsonl")
-TEST_JSON       = os.path.join(_cfg.paths.processed_dir, "test.jsonl")
+TRAIN_JSON      = os.path.join(_cfg.paths.processed_dir, "train.json")
+TEST_JSON       = os.path.join(_cfg.paths.processed_dir, "test.json")
 LORA_SAVE_PATH  = os.path.join(_cfg.paths.sft_checkpoint_dir, "final")
 OUTPUT_DIR      = _cfg.paths.sft_checkpoint_dir
 USE_RAG         = True
@@ -152,11 +152,11 @@ _fmt_stats = {
 def formatting_prompts_func(examples):
     """Format dataset examples into the training prompt."""
     instructions = examples["caption"]
-    outputs = examples["step"]
+    outputs = examples["output"]
     texts = []
 
     if USE_RAG:
-        inputs = examples.get("retrieved_step", [""] * len(instructions))
+        inputs = examples["relavant_step_file"]
         for instruction, input_, output in zip(instructions, inputs, outputs):
             _fmt_stats["total"] += 1
 
@@ -258,14 +258,14 @@ if (os.path.exists(_FORMATTED_TRAIN) and os.path.exists(_FORMATTED_TEST)
 else:
     logger.info(f"Loading train data from {TRAIN_JSON}")
     with open(TRAIN_JSON) as f:
-        train_records = [json.loads(line) for line in f if line.strip()]
+        train_records = json.load(f)
     dataset = Dataset.from_list(train_records)
     del train_records
     logger.info(f"  Raw train records: {len(dataset)}")
 
     logger.info(f"Loading test data from {TEST_JSON}")
     with open(TEST_JSON) as f:
-        test_records = [json.loads(line) for line in f if line.strip()]
+        test_records = json.load(f)
     test_dataset = Dataset.from_list(test_records)
     del test_records
     logger.info(f"  Raw test records:  {len(test_dataset)}")
@@ -391,44 +391,10 @@ class VerboseEpochCallback(TrainerCallback):
 
 
 # ── Training ─────────────────────────────────────────────────────────────────────
-from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
-from transformers import TrainingArguments
+from trl import SFTTrainer
+from transformers import TrainingArguments, DataCollatorForSeq2Seq
 from unsloth import is_bfloat16_supported
-
-_use_wandb = bool(os.environ.get("WANDB_API_KEY"))
-if _use_wandb:
-    import wandb
-    wandb.init(
-        project=os.environ.get("WANDB_PROJECT", "stepforge"),
-        name=os.environ.get("WANDB_RUN_NAME", "sft-refined"),
-        config={
-            "base_model": BASE_MODEL_PATH,
-            "max_seq_length": max_seq_length,
-            "lora_r": _cfg.model.lora_r,
-            "lora_alpha": _cfg.model.lora_alpha,
-            "epochs": _cfg.sft.num_epochs,
-            "lr": _cfg.sft.learning_rate,
-            "batch": _cfg.sft.per_device_train_batch_size,
-            "grad_accum": _cfg.sft.gradient_accumulation_steps,
-            "max_retrieved_tokens": MAX_RETRIEVED_TOKENS,
-            "variant": "refined",
-        },
-    )
-    logger.info("WandB enabled")
-else:
-    logger.info("WANDB_API_KEY not set — logging to none")
-
-# Use TRL's DataCollatorForCompletionOnlyLM to train on response tokens only.
-# This replicates the paper's setup: loss is computed only on the STEP output,
-# not on the system prompt or caption. It works with custom prompt formats
-# (unlike Unsloth's train_on_responses_only which uses token-ID matching and
-# removes all samples when the marker isn't found).
-_response_template = "### output:\n"
-_collator = DataCollatorForCompletionOnlyLM(
-    response_template=_response_template,
-    tokenizer=tokenizer,
-)
-logger.info(f"Using DataCollatorForCompletionOnlyLM with response_template={_response_template!r}")
+from unsloth.chat_templates import train_on_responses_only
 
 logger.info("Building SFTTrainer...")
 logger.info(f"  epochs={_cfg.sft.num_epochs}  lr={_cfg.sft.learning_rate}  "
@@ -441,7 +407,7 @@ trainer = SFTTrainer(
     eval_dataset=test_dataset,
     dataset_text_field="text",
     max_seq_length=max_seq_length,
-    data_collator=_collator,
+    data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer),
     dataset_num_proc=2,
     packing=False,
     args=TrainingArguments(
@@ -458,12 +424,51 @@ trainer = SFTTrainer(
         lr_scheduler_type="linear",
         seed=3407,
         output_dir=OUTPUT_DIR,
-        report_to="wandb" if _use_wandb else "none",
+        report_to="tensorboard",
         save_strategy="epoch",
         eval_strategy="epoch",
     ),
     callbacks=[VerboseEpochCallback()],
 )
+
+# Train only on model outputs (mask the prompt so loss is only on the STEP data)
+trainer = train_on_responses_only(
+    trainer,
+    instruction_part="### caption:\n",
+    response_part="### output:\n",
+)
+
+# ── All-masked labels check ──────────────────────────────────────────────────────
+# Verify train_on_responses_only actually found response tokens in a sample batch.
+# If all labels are -100, the model gets zero loss and learns nothing silently.
+logger.info("Checking label masking on first 8 examples...")
+_n_all_masked = 0
+_n_checked = 0
+for i in range(min(8, len(dataset))):
+    ex = trainer.train_dataset[i]
+    labels = ex.get("labels", [])
+    if labels:
+        _n_checked += 1
+        unmasked = sum(1 for l in labels if l != -100)
+        total_l = len(labels)
+        if unmasked == 0:
+            _n_all_masked += 1
+            logger.error(
+                f"  Example {i}: ALL {total_l} labels are -100 — "
+                f"train_on_responses_only found no '### output:\\n' marker. "
+                f"Model will learn NOTHING from this example."
+            )
+        else:
+            logger.info(f"  Example {i}: {unmasked}/{total_l} label tokens unmasked ({100*unmasked/total_l:.1f}%)")
+
+if _n_all_masked > 0:
+    logger.error(
+        f"CRITICAL: {_n_all_masked}/{_n_checked} checked examples have all-masked labels. "
+        f"Check that the response_part marker matches exactly what is in the formatted text."
+    )
+else:
+    logger.info("Label masking check passed — response tokens are being trained on.")
+# ── End label check ─────────────────────────────────────────────────────────────
 
 logger.info("Starting SFT training...")
 _train_start = time.time()
