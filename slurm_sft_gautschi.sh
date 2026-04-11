@@ -42,6 +42,12 @@ export KMP_DUPLICATE_LIB_OK=TRUE
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# ── Dependency pins (self-healing) ───────────────────────────────────────────
+# trl==0.14.3: has GRPOTrainer; newer versions need FSDPModule from torch>=2.6
+pip install -q "trl==0.14.3" 2>/dev/null || true
+# torchao conflicts with torch 2.5.1 (torch.int1 missing)
+pip uninstall -q torchao -y 2>/dev/null || true
+
 # ── Ensure output directories exist ──────────────────────────────────────────
 mkdir -p "$SCRATCH/stepforge/logs"
 mkdir -p "$SCRATCH/stepforge/checkpoints/sft"
