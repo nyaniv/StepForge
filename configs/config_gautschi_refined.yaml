@@ -1,0 +1,57 @@
+# Gautschi config for refined-variant branch.
+# Identical to config_gautschi.yaml except:
+#   - sft_checkpoint_dir  → checkpoints/sft-refined  (keep separate from main)
+#   - rl_checkpoint_dir   → checkpoints/rl-refined
+# Data fields used: output / relavant_step_file  (auto-detected by sft_multigpu.py)
+
+paths:
+  cad_seq_dir:           ${oc.env:SCRATCH}/data/cad_seq
+  caption_csv:           ${oc.env:SCRATCH}/data/text2cad_v1.1.csv
+  split_json:            ${oc.env:SCRATCH}/data/train_test_val.json
+  text2cad_src:          ${oc.env:SCRATCH}/data/Text2CAD/CadSeqProc
+
+  step_output_dir:       ${oc.env:SCRATCH}/stepforge/processed/step_files
+  processed_dir:         ${oc.env:SCRATCH}/stepforge/processed
+  faiss_index_path:      ${oc.env:SCRATCH}/stepforge/retrieval/caption_index.faiss
+  faiss_metadata_path:   ${oc.env:SCRATCH}/stepforge/retrieval/metadata.pkl
+  sft_checkpoint_dir:    ${oc.env:SCRATCH}/stepforge/checkpoints/sft-refined
+  rl_checkpoint_dir:     ${oc.env:SCRATCH}/stepforge/checkpoints/rl-refined
+
+data:
+  max_entities: 500
+  caption_column: "abstract"
+
+model:
+  base_model: "meta-llama/Llama-3.2-3B-Instruct"
+  max_seq_length: 16384
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+  use_quantization: false
+  # max_retrieved_tokens: not set — paper does not truncate retrieved context.
+
+sft:
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 2.0e-4
+  num_epochs: 10
+  warmup_ratio: 0.05
+  optim: "adamw_8bit"
+
+rl:
+  num_generations: 8
+  kl_coef: 0.02
+  entropy_coef: 0.005
+  learning_rate: 3.0e-6
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  max_steps: 80
+  max_completion_length: 8192
+  reward:
+    delta_low: 0.01
+    delta_high: 0.5
+    n_sample_points: 2048
+
+retrieval:
+  model: "all-MiniLM-L6-v2"
+  top_k: 1
