@@ -63,8 +63,25 @@ export NCCL_SOCKET_IFNAME=^lo,docker
 # ── Dependency pins (self-healing) ───────────────────────────────────────────
 pip install -q "trl==0.14.0" "transformers==4.51.3"
 pip uninstall -q torchao -y 2>/dev/null || true
-TRL_UTILS=$(python -c "import trl,os; print(os.path.join(os.path.dirname(trl.__file__),'models','utils.py'))")
-sed -i 's/^from torch.distributed.fsdp import FSDPModule$/try:\n    from torch.distributed.fsdp import FSDPModule\nexcept ImportError:\n    FSDPModule = None/' "$TRL_UTILS" 2>/dev/null || true
+python - <<'PATCH'
+import os, trl
+trl_dir = os.path.dirname(trl.__file__)
+p1 = os.path.join(trl_dir, "models", "utils.py")
+txt = open(p1).read()
+if "from torch.distributed.fsdp import FSDPModule" in txt and "except ImportError" not in txt:
+    txt = txt.replace(
+        "from torch.distributed.fsdp import FSDPModule",
+        "try:\n    from torch.distributed.fsdp import FSDPModule\nexcept ImportError:\n    FSDPModule = None"
+    )
+    open(p1, "w").write(txt)
+    print("Patched FSDPModule in trl/models/utils.py")
+p2 = os.path.join(trl_dir, "import_utils.py")
+txt2 = open(p2).read()
+if "_LazyModule" not in txt2:
+    txt2 += "\ntry:\n    from transformers.utils.import_utils import _LazyModule\nexcept ImportError:\n    _LazyModule = type('_LazyModule', (), {})\n"
+    open(p2, "w").write(txt2)
+    print("Patched _LazyModule into trl/import_utils.py")
+PATCH
 
 # ── Ensure output directories exist ──────────────────────────────────────────
 mkdir -p "$SCRATCH/stepforge/logs"
