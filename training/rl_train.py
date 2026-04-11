@@ -67,22 +67,31 @@ from retrieval.retriever import Retriever
 from reward.scd_reward import compute_reward, compute_parse_reward
 
 
-# ── Prompt format (identical to SFT) ──────────────────────────────────────────
-
-ABC_PROMPT_RAG = (
-    "You are a CAD model generation assistant trained to produce STEP (.step) files "
-    "based on textual descriptions. Given the following object description and relevant "
-    "retrieved CAD data, generate a STEP file that accurately represents the described object."
-    "\n\n\n### caption:\n{}\n\n### retrieved relevant step file:\n{}\n\n### output:\n"
-)
+# ── Prompt format (must match SFT chat template format) ───────────────────────
+# SFT trains with apply_chat_template — RL must use the same format so the
+# model sees the same prompt structure it was trained on.
 
 MAX_RETRIEVED_TOKENS: int = 500  # overridden per-config below in main(); default matches RunPod/local configs
+
+
+def _build_user_message(caption: str, retrieved_step: str) -> str:
+    return (
+        "You are a CAD model generation assistant trained to produce STEP (.step) files "
+        "based on textual descriptions. Given the following object description and relevant "
+        "retrieved CAD data, generate a STEP file that accurately represents the described object.\n\n"
+        f"### caption:\n{caption}\n\n"
+        f"### retrieved relevant step file:\n{retrieved_step}"
+    )
 
 
 def format_prompt(caption: str, retrieved_step: str, tokenizer) -> str:
     ids = tokenizer(retrieved_step, add_special_tokens=False)["input_ids"]
     truncated = tokenizer.decode(ids[:MAX_RETRIEVED_TOKENS])
-    return ABC_PROMPT_RAG.format(caption, truncated)
+    messages = [
+        {"role": "user", "content": _build_user_message(caption, truncated)},
+    ]
+    # add_generation_prompt=True so the model continues from the assistant turn
+    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 
 # ── Format reward (completion bonus) ──────────────────────────────────────────
