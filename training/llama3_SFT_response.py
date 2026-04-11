@@ -116,29 +116,29 @@ logger.info(f"LoRA config: r={_cfg.model.lora_r}, alpha={_cfg.model.lora_alpha}"
 model.print_trainable_parameters()
 
 # ── Prompt templates ────────────────────────────────────────────────────────────
-# These templates MUST be used consistently at both training and inference time.
+# Uses Llama's chat template (apply_chat_template) so that train_on_responses_only
+# can use the special header tokens <|start_header_id|>assistant<|end_header_id|>
+# which always tokenize to the same IDs regardless of surrounding context.
+# Custom "### output:\n" strings fail because BPE context affects their token IDs.
 
-ABC_PROMPT_RAG = """You are a CAD model generation assistant trained to produce STEP (.step) files based on textual descriptions. Given the following object description and relevant retrieved CAD data, generate a STEP file that accurately represents the described object.
+PROMPT_VERSION = "chat_template_v1"  # bump this if you change the user message format
 
+def _build_user_message(instruction: str, retrieved: str, use_rag: bool) -> str:
+    if use_rag:
+        return (
+            "You are a CAD model generation assistant trained to produce STEP (.step) files "
+            "based on textual descriptions. Given the following object description and relevant "
+            "retrieved CAD data, generate a STEP file that accurately represents the described object.\n\n"
+            f"### caption:\n{instruction}\n\n"
+            f"### retrieved relevant step file:\n{retrieved}"
+        )
+    return (
+        "You are a CAD model generation assistant trained to produce STEP (.step) files "
+        "based on textual descriptions. Given the following object description, generate a "
+        "STEP file that accurately represents the described object.\n\n"
+        f"### caption:\n{instruction}"
+    )
 
-### caption:
-{}
-
-### retrieved relevant step file:
-{}
-
-### output:
-{}"""
-
-ABC_PROMPT_NO_RAG = """You are a CAD model generation assistant trained to produce STEP (.step) files based on textual descriptions. Given the following object description, generate a STEP file that accurately represents the described object.
-
-### caption:
-{}
-
-### output:
-{}"""
-
-EOS_TOKEN = tokenizer.eos_token  # must be appended to every training example
 
 # ── Formatting stats (populated during dataset.map) ────────────────────────────
 _fmt_stats = {
@@ -153,7 +153,7 @@ _fmt_stats = {
 
 
 def formatting_prompts_func(examples):
-    """Format dataset examples into the training prompt."""
+    """Format dataset examples into the training prompt using the chat template."""
     instructions = examples["caption"]
     outputs = examples["step"]
     texts = []
@@ -163,7 +163,6 @@ def formatting_prompts_func(examples):
         for instruction, input_, output in zip(instructions, inputs, outputs):
             _fmt_stats["total"] += 1
 
-            # Track missing fields
             if not instruction:
                 _fmt_stats["missing_caption"] += 1
                 logger.warning(f"[fmt] Missing caption at index {_fmt_stats['total']}")
@@ -174,7 +173,6 @@ def formatting_prompts_func(examples):
                 _fmt_stats["missing_retrieved"] += 1
 
             # Truncate retrieved STEP to MAX_RETRIEVED_TOKENS.
-            # See comment above MAX_RETRIEVED_TOKENS for rationale.
             ids = tokenizer(input_ or "", add_special_tokens=False)["input_ids"]
             if len(ids) > MAX_RETRIEVED_TOKENS:
                 _fmt_stats["truncated"] += 1
@@ -183,17 +181,24 @@ def formatting_prompts_func(examples):
             else:
                 truncated = input_ or ""
 
-            text = ABC_PROMPT_RAG.format(instruction or "", truncated, output or "") + EOS_TOKEN
+            messages = [
+                {"role": "user",      "content": _build_user_message(instruction or "", truncated, True)},
+                {"role": "assistant", "content": output or ""},
+            ]
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
             texts.append(text)
 
-            # Track sequence length
             seq_ids = tokenizer(text, add_special_tokens=False)["input_ids"]
             _fmt_stats["seq_lengths"].append(len(seq_ids))
 
     else:
         for instruction, output in zip(instructions, outputs):
             _fmt_stats["total"] += 1
-            text = ABC_PROMPT_NO_RAG.format(instruction, output) + EOS_TOKEN
+            messages = [
+                {"role": "user",      "content": _build_user_message(instruction, "", False)},
+                {"role": "assistant", "content": output},
+            ]
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
             texts.append(text)
             seq_ids = tokenizer(text, add_special_tokens=False)["input_ids"]
             _fmt_stats["seq_lengths"].append(len(seq_ids))
@@ -248,8 +253,8 @@ def _compute_cache_key() -> str:
     parts.append(f"max_ret={MAX_RETRIEVED_TOKENS}")
     parts.append(f"rag={USE_RAG}")
     parts.append(f"model={BASE_MODEL_PATH}")
-    # Include prompt template so cache is invalidated if the format changes
-    parts.append(f"prompt={ABC_PROMPT_RAG}")
+    # Include prompt version so cache is invalidated if the format changes
+    parts.append(f"prompt_version={PROMPT_VERSION}")
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
@@ -438,12 +443,12 @@ trainer = SFTTrainer(
     callbacks=[VerboseEpochCallback()],
 )
 
-# Mask prompt tokens — train only on the STEP output after "### output:\n".
-# Token IDs [14711, 2612, 512] verified present in real examples (Gautschi, 2026-04-11).
+# Use Llama's special header tokens — context-independent (fixed IDs) unlike
+# custom strings like "### output:\n" whose BPE tokens shift with surrounding context.
 trainer = train_on_responses_only(
     trainer,
-    instruction_part="### caption:\n",
-    response_part="### output:\n",
+    instruction_part="<|start_header_id|>user<|end_header_id|>\n\n",
+    response_part="<|start_header_id|>assistant<|end_header_id|>\n\n",
 )
 
 # Verify masking worked — Unsloth silently removes all-masked samples before this check,
