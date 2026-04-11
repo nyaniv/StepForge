@@ -395,24 +395,28 @@ from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 from transformers import TrainingArguments
 from unsloth import is_bfloat16_supported
 
-import wandb
-_run_name = os.environ.get("WANDB_RUN_NAME", "sft")
-wandb.init(
-    project=os.environ.get("WANDB_PROJECT", "stepforge"),
-    name=_run_name,
-    config={
-        "base_model": BASE_MODEL_PATH,
-        "max_seq_length": max_seq_length,
-        "lora_r": _cfg.model.lora_r,
-        "lora_alpha": _cfg.model.lora_alpha,
-        "epochs": _cfg.sft.num_epochs,
-        "lr": _cfg.sft.learning_rate,
-        "batch": _cfg.sft.per_device_train_batch_size,
-        "grad_accum": _cfg.sft.gradient_accumulation_steps,
-        "max_retrieved_tokens": MAX_RETRIEVED_TOKENS,
-        "variant": "refined",
-    },
-)
+_use_wandb = bool(os.environ.get("WANDB_API_KEY"))
+if _use_wandb:
+    import wandb
+    wandb.init(
+        project=os.environ.get("WANDB_PROJECT", "stepforge"),
+        name=os.environ.get("WANDB_RUN_NAME", "sft-refined"),
+        config={
+            "base_model": BASE_MODEL_PATH,
+            "max_seq_length": max_seq_length,
+            "lora_r": _cfg.model.lora_r,
+            "lora_alpha": _cfg.model.lora_alpha,
+            "epochs": _cfg.sft.num_epochs,
+            "lr": _cfg.sft.learning_rate,
+            "batch": _cfg.sft.per_device_train_batch_size,
+            "grad_accum": _cfg.sft.gradient_accumulation_steps,
+            "max_retrieved_tokens": MAX_RETRIEVED_TOKENS,
+            "variant": "refined",
+        },
+    )
+    logger.info("WandB enabled")
+else:
+    logger.info("WANDB_API_KEY not set — logging to none")
 
 # Use TRL's DataCollatorForCompletionOnlyLM to train on response tokens only.
 # This replicates the paper's setup: loss is computed only on the STEP output,
@@ -454,7 +458,7 @@ trainer = SFTTrainer(
         lr_scheduler_type="linear",
         seed=3407,
         output_dir=OUTPUT_DIR,
-        report_to="wandb",
+        report_to="wandb" if _use_wandb else "none",
         save_strategy="epoch",
         eval_strategy="epoch",
     ),
