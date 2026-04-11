@@ -364,9 +364,20 @@ class VerboseEpochCallback(TrainerCallback):
 
 
 # ── Training ─────────────────────────────────────────────────────────────────────
-from trl import SFTTrainer
-from transformers import TrainingArguments, DataCollatorForSeq2Seq
+from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+from transformers import TrainingArguments
 from unsloth import is_bfloat16_supported
+
+# Use TRL's DataCollatorForCompletionOnlyLM to train on response tokens only.
+# This replicates the paper's setup: loss is computed only on the STEP output,
+# not on the system prompt or caption. It works with custom prompt formats
+# (unlike Unsloth's train_on_responses_only which uses token-ID matching).
+_response_template = "### output:\n"
+_collator = DataCollatorForCompletionOnlyLM(
+    response_template=_response_template,
+    tokenizer=tokenizer,
+)
+logger.info(f"Using DataCollatorForCompletionOnlyLM with response_template={_response_template!r}")
 
 logger.info("Building SFTTrainer...")
 logger.info(f"  epochs={_cfg.sft.num_epochs}  lr={_cfg.sft.learning_rate}  "
@@ -379,7 +390,7 @@ trainer = SFTTrainer(
     eval_dataset=test_dataset,
     dataset_text_field="text",
     max_seq_length=max_seq_length,
-    data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer),
+    data_collator=_collator,
     dataset_num_proc=2,
     packing=False,
     args=TrainingArguments(
@@ -396,52 +407,12 @@ trainer = SFTTrainer(
         lr_scheduler_type="linear",
         seed=3407,
         output_dir=OUTPUT_DIR,
-        report_to="none",       # set to "wandb" for experiment tracking
+        report_to="none",
         save_strategy="steps",
         save_steps=300,
     ),
     callbacks=[VerboseEpochCallback()],
 )
-
-# Train only on model outputs (mask the prompt so loss is only on the STEP data)
-from unsloth.chat_templates import train_on_responses_only
-trainer = train_on_responses_only(
-    trainer,
-    instruction_part="### caption:\n",
-    response_part="### output:\n",
-)
-
-# ── All-masked labels check ──────────────────────────────────────────────────────
-# Verify train_on_responses_only actually found response tokens in a sample batch.
-# If all labels are -100, the model gets zero loss and learns nothing silently.
-logger.info("Checking label masking on first 8 examples...")
-_n_all_masked = 0
-_n_checked = 0
-for i in range(min(8, len(dataset))):
-    ex = trainer.train_dataset[i]
-    labels = ex.get("labels", [])
-    if labels:
-        _n_checked += 1
-        unmasked = sum(1 for l in labels if l != -100)
-        total_l = len(labels)
-        if unmasked == 0:
-            _n_all_masked += 1
-            logger.error(
-                f"  Example {i}: ALL {total_l} labels are -100 — "
-                f"train_on_responses_only found no '### output:\\n' marker. "
-                f"Model will learn NOTHING from this example."
-            )
-        else:
-            logger.info(f"  Example {i}: {unmasked}/{total_l} label tokens unmasked ({100*unmasked/total_l:.1f}%)")
-
-if _n_all_masked > 0:
-    logger.error(
-        f"CRITICAL: {_n_all_masked}/{_n_checked} checked examples have all-masked labels. "
-        f"Check that the response_part marker matches exactly what is in the formatted text."
-    )
-else:
-    logger.info("Label masking check passed — response tokens are being trained on.")
-# ── End label check ─────────────────────────────────────────────────────────────
 
 logger.info("Starting SFT training...")
 _train_start = time.time()
