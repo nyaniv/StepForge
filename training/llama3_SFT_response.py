@@ -248,6 +248,8 @@ def _compute_cache_key() -> str:
     parts.append(f"max_ret={MAX_RETRIEVED_TOKENS}")
     parts.append(f"rag={USE_RAG}")
     parts.append(f"model={BASE_MODEL_PATH}")
+    # Include prompt template so cache is invalidated if the format changes
+    parts.append(f"prompt={ABC_PROMPT_RAG}")
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
@@ -444,8 +446,17 @@ trainer = train_on_responses_only(
     response_part="### output:\n",
 )
 
-# Verify masking worked on first 4 examples before wasting GPU time.
+# Verify masking worked — Unsloth silently removes all-masked samples before this check,
+# so check train_dataset size first.
 logger.info("Checking label masking on first 4 examples...")
+if len(trainer.train_dataset) == 0:
+    raise RuntimeError(
+        "train_dataset is empty after train_on_responses_only. "
+        "Unsloth removed all samples (all labels were -100). "
+        "The response_part was not found in any example. "
+        "Check that response_part='### output:\\n' appears in the formatted text "
+        "and that the formatted dataset cache is not stale."
+    )
 _n_all_masked = 0
 for i in range(min(4, len(trainer.train_dataset))):
     labels = trainer.train_dataset[i].get("labels", [])
