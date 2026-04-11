@@ -1,11 +1,14 @@
 #!/bin/bash
 # =============================================================================
 # StepForge — Multi-GPU SFT job for refined-variant branch (Gautschi)
-# Identical to slurm_sft_multigpu_gautschi.sh but uses config_gautschi_refined.yaml
-# so checkpoints go to checkpoints/sft-refined (separate from main branch run).
+# Identical to slurm_sft_multigpu_gautschi.sh but uses config_gautschi_refined.yaml.
 #
-# Submit: sbatch slurm_sft_multigpu_refined_gautschi.sh
-# Log:    tail -f $SCRATCH/stepforge/logs/sft_refined_<JOBID>.out
+# Each run is fully namespaced under its own directory:
+#   $SCRATCH/stepforge/runs/sft_refined_<JOBID>/
+#
+# Submit:  sbatch slurm_sft_multigpu_refined_gautschi.sh
+# Resume:  sbatch slurm_sft_multigpu_refined_gautschi.sh /path/to/existing/run/dir
+# Log:     tail -f $SCRATCH/stepforge/runs/sft_refined_<JOBID>/slurm.out
 # =============================================================================
 #SBATCH --job-name=stepforge_sft_refined
 #SBATCH --output=%x_%j.out
@@ -43,6 +46,19 @@ export NCCL_DEBUG=WARN
 export NCCL_IB_DISABLE=0
 export NCCL_SOCKET_IFNAME=^lo,docker
 
+# ── Namespaced run directory ──────────────────────────────────────────────────
+if [ -n "${1:-}" ] && [ -d "$1" ]; then
+    RUN_DIR="$1"
+    echo "[$(date)] Resuming existing run: $RUN_DIR"
+else
+    RUN_DIR="$SCRATCH/stepforge/runs/sft_refined_${SLURM_JOB_ID}"
+    mkdir -p "$RUN_DIR"
+    echo "[$(date)] New run directory: $RUN_DIR"
+fi
+
+exec > >(tee -a "${RUN_DIR}/slurm.out") 2>&1
+
+# ── Dependency pins ───────────────────────────────────────────────────────────
 pip install -q "trl==0.14.0" "transformers==4.51.3"
 pip uninstall -q torchao -y 2>/dev/null || true
 python - <<'PATCH'
@@ -65,16 +81,11 @@ if "_LazyModule" not in txt2:
     print("Patched _LazyModule into trl/import_utils.py")
 PATCH
 
-mkdir -p "$SCRATCH/stepforge/logs"
-mkdir -p "$SCRATCH/stepforge/checkpoints/sft-refined"
-
-LOG_DIR="$SCRATCH/stepforge/logs"
-exec > >(tee -a "${LOG_DIR}/sft_refined_${SLURM_JOB_ID}.out") 2>&1
-
+# ── Signal handler ────────────────────────────────────────────────────────────
 _resubmit() {
     echo ""
-    echo "[$(date)] Time limit approaching — resubmitting refined-variant job..."
-    sbatch "${HOME}/StepForge/slurm_sft_multigpu_refined_gautschi.sh"
+    echo "[$(date)] Time limit approaching — resubmitting into same run dir: $RUN_DIR"
+    sbatch "${HOME}/StepForge/slurm_sft_multigpu_refined_gautschi.sh" "$RUN_DIR"
     echo "[$(date)] Resubmit issued. Exiting current job gracefully."
     exit 0
 }
@@ -84,6 +95,7 @@ echo "========================================"
 echo " StepForge SFT Multi-GPU — refined-variant"
 echo "========================================"
 echo " Job ID   : $SLURM_JOB_ID"
+echo " Run dir  : $RUN_DIR"
 echo " Node     : $(hostname)"
 echo " GPUs     : $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo 'unknown')"
 echo " World    : 8 processes (1 per GPU)"
@@ -101,7 +113,8 @@ torchrun \
     --standalone \
     --nproc_per_node=8 \
     training/sft_multigpu.py \
-        --config configs/config_gautschi_refined.yaml &
+        --config configs/config_gautschi_refined.yaml \
+        --output-dir "$RUN_DIR" &
 
 wait $!
 SFT_EXIT=$?
@@ -112,8 +125,8 @@ echo "========================================"
 
 if [ $SFT_EXIT -eq 0 ]; then
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    FINAL_DIR="$SCRATCH/stepforge/checkpoints/sft-refined/final"
-    SNAPSHOT_DIR="$SCRATCH/stepforge/checkpoints/sft-refined/sft_weights_${TIMESTAMP}"
+    FINAL_DIR="${RUN_DIR}/final"
+    SNAPSHOT_DIR="${RUN_DIR}/sft_weights_${TIMESTAMP}"
     if [ -d "$FINAL_DIR" ]; then
         echo "Saving timestamped weight snapshot to $SNAPSHOT_DIR ..."
         cp -r "$FINAL_DIR" "$SNAPSHOT_DIR"

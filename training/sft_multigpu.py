@@ -63,6 +63,8 @@ is_rank0    = local_rank == 0
 # ── Args ─────────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(description="STEP-LLM SFT (multi-GPU)")
 parser.add_argument("--config", default="configs/config_gautschi.yaml")
+parser.add_argument("--output-dir", default=None,
+                    help="Override cfg.paths.sft_checkpoint_dir (used by SLURM for job-namespaced runs)")
 args, _ = parser.parse_known_args()
 
 cfg_path = args.config if os.path.isabs(args.config) else os.path.join(
@@ -71,7 +73,7 @@ cfg_path = args.config if os.path.isabs(args.config) else os.path.join(
 cfg = OmegaConf.load(cfg_path)
 
 BASE_MODEL_PATH = cfg.model.base_model
-OUTPUT_DIR      = cfg.paths.sft_checkpoint_dir
+OUTPUT_DIR      = args.output_dir or cfg.paths.sft_checkpoint_dir
 LORA_SAVE_PATH  = os.path.join(OUTPUT_DIR, "final")
 
 # Auto-detect data format:

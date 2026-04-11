@@ -8,28 +8,27 @@
 #   Paper ran 4×H100, effective batch=16, 10 epochs, lr=2e-4
 #   Here:    8×H100 × 2 per_device × 1 grad_accum = 16 effective batch  ✓
 #
-# Submit: sbatch slurm_sft_multigpu_gautschi.sh
-# Check:  squeue -u $USER
-# Log:    tail -f $SCRATCH/stepforge/logs/sft_<JOBID>.out
+# Each run is fully namespaced under its own directory:
+#   $SCRATCH/stepforge/runs/sft_<JOBID>/
 #
-# Auto-resume: SLURM sends SIGUSR1 120s before time limit;
-# the handler re-queues the job and Trainer resumes from the latest
-# epoch checkpoint automatically on restart.
+# Submit:  sbatch slurm_sft_multigpu_gautschi.sh
+# Resume:  sbatch slurm_sft_multigpu_gautschi.sh /path/to/existing/run/dir
+# Log:     tail -f $SCRATCH/stepforge/runs/sft_<JOBID>/slurm.out
 # =============================================================================
 #SBATCH --job-name=stepforge_sft_multigpu
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
-#SBATCH --ntasks=8                  # 1 task per GPU (torchrun model)
+#SBATCH --ntasks=8
 #SBATCH --ntasks-per-node=8
-#SBATCH --cpus-per-task=14          # 112 CPUs / 8 GPUs = 14 CPUs per task
-#SBATCH --mem=800G                  # ~100 GB per GPU process; well within 1 TB
-#SBATCH --gres=gpu:8                # full node: 8× H100 80GB
+#SBATCH --cpus-per-task=14
+#SBATCH --mem=800G
+#SBATCH --gres=gpu:8
 #SBATCH --partition=ai
 #SBATCH --account=lilly-agentic-gpu
-#SBATCH --requeue                   # allow requeue on preemption or time limit
-#SBATCH --signal=B:SIGUSR1@120      # warn 120 s before wall-time so we can resubmit
+#SBATCH --requeue
+#SBATCH --signal=B:SIGUSR1@120
 
 # ── Source the module system ─────────────────────────────────────────────────
 if [ -f /etc/profile.d/modules.sh ]; then
@@ -52,11 +51,24 @@ export PYTHONPATH="${HOME}/StepForge:${PYTHONPATH:-}"
 export KMP_DUPLICATE_LIB_OK=TRUE
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
-# NCCL tuning for H100 NVLink interconnect
 export NCCL_DEBUG=WARN
 export NCCL_IB_DISABLE=0
 export NCCL_SOCKET_IFNAME=^lo,docker
+
+# ── Namespaced run directory ──────────────────────────────────────────────────
+# $1 is set on resume (resubmit passes the original run dir so we continue
+# into the same directory instead of creating a new one).
+if [ -n "${1:-}" ] && [ -d "$1" ]; then
+    RUN_DIR="$1"
+    echo "[$(date)] Resuming existing run: $RUN_DIR"
+else
+    RUN_DIR="$SCRATCH/stepforge/runs/sft_${SLURM_JOB_ID}"
+    mkdir -p "$RUN_DIR"
+    echo "[$(date)] New run directory: $RUN_DIR"
+fi
+
+# All output lives under RUN_DIR
+exec > >(tee -a "${RUN_DIR}/slurm.out") 2>&1
 
 # ── Dependency pins (self-healing) ───────────────────────────────────────────
 pip install -q "trl==0.14.0" "transformers==4.51.3"
@@ -81,21 +93,11 @@ if "_LazyModule" not in txt2:
     print("Patched _LazyModule into trl/import_utils.py")
 PATCH
 
-# ── Ensure output directories exist ──────────────────────────────────────────
-mkdir -p "$SCRATCH/stepforge/logs"
-mkdir -p "$SCRATCH/stepforge/checkpoints/sft"
-
-# Redirect SLURM logs to scratch
-LOG_DIR="$SCRATCH/stepforge/logs"
-exec > >(tee -a "${LOG_DIR}/sft_${SLURM_JOB_ID}.out") 2>&1
-
 # ── Signal handler: resubmit on approaching time limit ───────────────────────
 _resubmit() {
     echo ""
-    echo "[$(date)] Time limit approaching — resubmitting job for checkpoint resume..."
-    # Trainer saves at save_strategy="epoch"; trainer.train(resume_from_checkpoint=...)
-    # picks up the latest epoch checkpoint automatically on the next run.
-    sbatch "${HOME}/StepForge/slurm_sft_multigpu_gautschi.sh"
+    echo "[$(date)] Time limit approaching — resubmitting into same run dir: $RUN_DIR"
+    sbatch "${HOME}/StepForge/slurm_sft_multigpu_gautschi.sh" "$RUN_DIR"
     echo "[$(date)] Resubmit issued. Exiting current job gracefully."
     exit 0
 }
@@ -106,6 +108,7 @@ echo "========================================"
 echo " StepForge SFT Multi-GPU — Gautschi"
 echo "========================================"
 echo " Job ID   : $SLURM_JOB_ID"
+echo " Run dir  : $RUN_DIR"
 echo " Node     : $(hostname)"
 echo " GPUs     : $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo 'unknown')"
 echo " World    : 8 processes (1 per GPU)"
@@ -125,9 +128,9 @@ torchrun \
     --standalone \
     --nproc_per_node=8 \
     training/sft_multigpu.py \
-        --config configs/config_gautschi.yaml &
+        --config configs/config_gautschi.yaml \
+        --output-dir "$RUN_DIR" &
 
-# Wait in background so SIGUSR1 trap can fire
 wait $!
 SFT_EXIT=$?
 
@@ -135,11 +138,11 @@ echo "========================================"
 echo " SFT finished : $(date)  (exit=$SFT_EXIT)"
 echo "========================================"
 
-# ── Save timestamped snapshot of final weights ────────────────────────────────
+# ── Timestamped weight snapshot on successful completion ─────────────────────
 if [ $SFT_EXIT -eq 0 ]; then
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    FINAL_DIR="$SCRATCH/stepforge/checkpoints/sft/final"
-    SNAPSHOT_DIR="$SCRATCH/stepforge/checkpoints/sft/sft_weights_${TIMESTAMP}"
+    FINAL_DIR="${RUN_DIR}/final"
+    SNAPSHOT_DIR="${RUN_DIR}/sft_weights_${TIMESTAMP}"
     if [ -d "$FINAL_DIR" ]; then
         echo "Saving timestamped weight snapshot to $SNAPSHOT_DIR ..."
         cp -r "$FINAL_DIR" "$SNAPSHOT_DIR"
