@@ -14,7 +14,7 @@
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16          # plenty for data workers + OCC subprocesses
+#SBATCH --cpus-per-task=14          # AI partition requires 14 CPUs per GPU
 #SBATCH --mem=128G                  # well within the 1 TB node limit
 #SBATCH --gres=gpu:1                # 1× H100 80GB — Unsloth does not support multi-GPU
 #SBATCH --partition=ai
