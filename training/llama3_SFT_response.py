@@ -33,7 +33,7 @@ from omegaconf import OmegaConf
 
 _parser = argparse.ArgumentParser(description="STEP-LLM SFT (Unsloth)")
 _parser.add_argument("--config", default="configs/config_runpod.yaml",
-                     help="Config YAML. NB: config_runpod.yaml previously had num_epochs=1 (smoke test); now matches paper.")
+                     help="Path to config YAML (relative paths resolved from project root)")
 _args, _ = _parser.parse_known_args()
 _cfg_path = _args.config if os.path.isabs(_args.config) else os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), _args.config
@@ -72,6 +72,9 @@ max_seq_length = _cfg.model.max_seq_length  # RoPE Scaling is handled automatica
 # DFS ordering front-loads root structure (shell, faces, axes) so the first ~35 entities
 # (~500 tokens) carry the bulk of useful structural signal; trailing entities are mostly
 # repeated CARTESIAN_POINT coordinates specific to the retrieved shape.
+# 500 tokens is a deliberate cost-saving choice. The paper does not truncate retrieved
+# context — increasing MAX_RETRIEVED_TOKENS improves RAG fidelity at the cost of
+# proportionally less room for the GT STEP output within max_seq_length.
 # W1: The paper does NOT truncate retrieved context (§3.2). 4500 covers a
 # typical ~265-entity retrieval. Override via cfg.sft.max_retrieved_tokens
 # (or cfg.model.max_retrieved_tokens — upstream gautschi config uses this key).
@@ -112,6 +115,12 @@ model = FastLanguageModel.get_peft_model(
 logger.info(f"LoRA config: r={_cfg.model.lora_r}, alpha={_cfg.model.lora_alpha}")
 model.print_trainable_parameters()
 
+# ── Validate _ASSISTANT_HEADER_IDS against actual tokenizer ─────────────────────
+# Do this before formatting so a mismatch aborts immediately instead of silently
+# producing 39k all-masked examples.
+_EXPECTED_HEADER_STR = "<|start_header_id|>assistant<|end_header_id|>\n\n"
+_actual_header_ids = tokenizer.encode(_EXPECTED_HEADER_STR, add_special_tokens=False)
+
 # ── Prompt templates ────────────────────────────────────────────────────────────
 # Uses Llama's chat template (apply_chat_template). Label masking is done manually
 # in formatting_prompts_func by searching for _ASSISTANT_HEADER_IDS in input_ids.
@@ -124,6 +133,16 @@ PROMPT_VERSION = "manual_mask_v1"  # bump this if you change the user message fo
 # These are special tokens with stable IDs regardless of surrounding context.
 _ASSISTANT_HEADER_IDS = [128006, 78191, 128007, 271]
 _ASSISTANT_HEADER_LEN = len(_ASSISTANT_HEADER_IDS)
+
+if _actual_header_ids != _ASSISTANT_HEADER_IDS:
+    raise RuntimeError(
+        f"_ASSISTANT_HEADER_IDS mismatch for this tokenizer!\n"
+        f"  Expected : {_ASSISTANT_HEADER_IDS}\n"
+        f"  Got      : {_actual_header_ids}\n"
+        f"  String   : {_EXPECTED_HEADER_STR!r}\n"
+        f"Update _ASSISTANT_HEADER_IDS in the script to match this tokenizer."
+    )
+logger.info(f"Tokenizer header IDs validated: {_ASSISTANT_HEADER_IDS}")
 
 
 def _find_response_start(input_ids: list) -> int:
@@ -220,15 +239,13 @@ def formatting_prompts_func(examples):
 
         response_start = _find_response_start(input_ids)
         if response_start == -1:
-            # Should never happen with Llama special tokens — log and mask all
-            logger.error(
-                f"[fmt] Assistant header tokens not found in tokenized sequence "
-                f"(len={len(input_ids)}). Example will be fully masked (labels=-100)."
+            raise RuntimeError(
+                f"[fmt] Assistant header tokens {_ASSISTANT_HEADER_IDS} not found in "
+                f"tokenized sequence (len={len(input_ids)}). This should never happen "
+                f"with Llama special tokens — check that apply_chat_template is producing "
+                f"the expected format. Aborting to avoid training on all-masked examples."
             )
-            labels = [-100] * len(input_ids)
-        else:
-            # Mask the instruction; train only on the response
-            labels = [-100] * response_start + input_ids[response_start:]
+        labels = [-100] * response_start + input_ids[response_start:]
 
         _fmt_stats["seq_lengths"].append(len(input_ids))
         return input_ids, attention_mask, labels, text
@@ -257,11 +274,11 @@ def formatting_prompts_func(examples):
     }
 
 
-def _log_fmt_stats(tag: str):
-    """Log a summary of the formatting stats collected so far."""
+def _log_fmt_stats(tag: str, is_train: bool = True):
+    """Log a summary of the formatting stats collected so far. Aborts on fatal issues."""
     s = _fmt_stats
     if not s["seq_lengths"]:
-        return
+        raise RuntimeError(f"[{tag}] No examples were formatted — dataset is empty.")
     lengths = sorted(s["seq_lengths"])
     n = len(lengths)
     over_limit = sum(1 for l in lengths if l > max_seq_length)
@@ -275,12 +292,27 @@ def _log_fmt_stats(tag: str):
         logger.info(f"    original len (p50/p90/max): {tl[len(tl)//2]} / {tl[int(len(tl)*0.9)]} / {tl[-1]} tokens")
     logger.info(f"  seq length  p25={lengths[n//4]}  p50={lengths[n//2]}  p75={lengths[3*n//4]}  p90={lengths[int(n*0.9)]}  max={lengths[-1]}")
     logger.info(f"  over max_seq_length ({max_seq_length}): {over_limit} ({over_pct:.1f}%) — will be truncated by trainer")
+
+    fatal = []
     if s["missing_caption"]:
-        logger.error(f"  MISSING captions: {s['missing_caption']}")
-    if s["missing_output"]:
-        logger.error(f"  MISSING outputs: {s['missing_output']}")
-    if s["missing_retrieved"] and USE_RAG:
-        logger.error(f"  MISSING retrieved_step: {s['missing_retrieved']}")
+        fatal.append(f"MISSING captions: {s['missing_caption']}")
+    if s["missing_output"] and is_train:
+        fatal.append(f"MISSING outputs: {s['missing_output']} — model would train on empty responses")
+    elif s["missing_output"]:
+        logger.warning(f"  [{tag}] MISSING outputs: {s['missing_output']}")
+    if s["missing_retrieved"] and USE_RAG and is_train:
+        # Train set missing retrieved steps = broken RAG data pipeline
+        fatal.append(f"MISSING retrieved_step on train: {s['missing_retrieved']}")
+    elif s["missing_retrieved"] and USE_RAG:
+        # Test set often has no retrieved steps — expected, just log info
+        logger.info(f"  [{tag}] No retrieved_step on {s['missing_retrieved']} test examples (expected)")
+
+    if fatal:
+        for msg in fatal:
+            logger.error(f"  FATAL [{tag}]: {msg}")
+        raise RuntimeError(
+            f"Dataset formatting failed for [{tag}]: " + "; ".join(fatal)
+        )
 
 
 # ── Dataset ─────────────────────────────────────────────────────────────────────
@@ -290,6 +322,7 @@ from datasets import Dataset
 _FORMATTED_TRAIN = os.path.join(OUTPUT_DIR, "formatted_train")
 _FORMATTED_TEST  = os.path.join(OUTPUT_DIR, "formatted_test")
 _CACHE_KEY_PATH  = os.path.join(OUTPUT_DIR, ".formatted_cache_key")
+
 
 def _compute_cache_key() -> str:
     import hashlib
@@ -306,6 +339,7 @@ def _compute_cache_key() -> str:
     # Include prompt version so cache is invalidated if the format changes
     parts.append(f"prompt_version={PROMPT_VERSION}")
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
 
 _current_key = _compute_cache_key()
 _stored_key  = open(_CACHE_KEY_PATH).read().strip() if os.path.exists(_CACHE_KEY_PATH) else ""
@@ -333,7 +367,7 @@ else:
 
     logger.info("Formatting train dataset...")
     dataset = dataset.map(formatting_prompts_func, batched=True)
-    _log_fmt_stats("train")
+    _log_fmt_stats("train", is_train=True)
 
     # Reset counters for test set
     for k in ("total", "truncated", "missing_caption", "missing_output", "missing_retrieved"):
@@ -343,7 +377,7 @@ else:
 
     logger.info("Formatting test dataset...")
     test_dataset = test_dataset.map(formatting_prompts_func, batched=True)
-    _log_fmt_stats("test")
+    _log_fmt_stats("test", is_train=False)
 
     logger.info("Saving formatted datasets to disk for future runs...")
     dataset.save_to_disk(_FORMATTED_TRAIN)
@@ -353,6 +387,10 @@ else:
     logger.info(f"  Saved to {_FORMATTED_TRAIN} and {_FORMATTED_TEST}")
 
 logger.info(f"Final train size: {len(dataset)}  |  test size: {len(test_dataset)}")
+if len(dataset) == 0:
+    raise RuntimeError(f"Train dataset is empty. Check {TRAIN_JSON} exists and has valid records.")
+if len(test_dataset) == 0:
+    raise RuntimeError(f"Test dataset is empty. Check {TEST_JSON} exists and has valid records.")
 
 
 # ── Per-epoch callback ───────────────────────────────────────────────────────────
@@ -393,10 +431,15 @@ class VerboseEpochCallback(TrainerCallback):
             elif loss == 0.0:
                 self._all_masked_count += 1
                 logger.warning(
-                    f"[step {state.global_step}] Zero loss — possible all-masked labels "
-                    f"(train_on_responses_only found no response tokens). "
+                    f"[step {state.global_step}] Zero loss — possible all-masked labels. "
                     f"Consecutive zero-loss steps: {self._all_masked_count}"
                 )
+                if self._all_masked_count >= 20:
+                    logger.error(
+                        f"ABORTING: {self._all_masked_count} consecutive zero-loss steps. "
+                        f"Label masking is broken — model is not learning anything."
+                    )
+                    control.should_training_stop = True
             else:
                 self._all_masked_count = 0  # reset streak
         if grad_norm is not None:
@@ -486,7 +529,7 @@ trainer = SFTTrainer(
         lr_scheduler_type="linear",
         seed=3407,
         output_dir=OUTPUT_DIR,
-        report_to="none",
+        report_to="none",  # tensorboard not installed on Gautschi
         save_strategy="epoch",
         eval_strategy="epoch",
     ),
@@ -526,9 +569,6 @@ else:
 
 logger.info("Starting SFT training...")
 _train_start = time.time()
-# CR-1: auto-resume from the latest checkpoint-N if one exists. Without this,
-# a wall-clock kill or preemption restarts from epoch 0 even though per-epoch
-# checkpoints (with full optimizer/scheduler/RNG state) are already on disk.
 import glob as _glob
 _ckpts = sorted(
     _glob.glob(os.path.join(OUTPUT_DIR, "checkpoint-*")),
@@ -536,9 +576,9 @@ _ckpts = sorted(
 )
 _resume_from = _ckpts[-1] if _ckpts else None
 if _resume_from:
-    logger.info(f"CR-1: resuming from {_resume_from}")
+    logger.info(f"Auto-resuming from {_resume_from}")
 else:
-    logger.info("CR-1: no existing checkpoint — starting from scratch")
+    logger.info("No existing checkpoint — starting from scratch")
 trainer_stats = trainer.train(resume_from_checkpoint=_resume_from)
 _train_total = time.time() - _train_start
 
