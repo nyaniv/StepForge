@@ -23,7 +23,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=128G
-#SBATCH --partition=lilly-agentic-cpu
+#SBATCH --partition=cpu
 #SBATCH --account=lilly-agentic-cpu
 
 # ── Source the module system ─────────────────────────────────────────────────
