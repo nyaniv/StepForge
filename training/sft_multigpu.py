@@ -32,6 +32,7 @@ if "HF_HOME" not in os.environ:
         os.environ["HF_HOME"] = os.path.join(os.environ.get("VOLUME", "/runpod-volume"), ".hf-cache")
 
 import argparse
+import csv
 import glob as _glob
 import hashlib
 import json
@@ -419,6 +420,43 @@ class VerboseEpochCallback(TrainerCallback):
             logger.info(f"{'='*60}")
 
 
+class LossLoggerCallback(TrainerCallback):
+    """Writes every logged step to a CSV for easy plotting later."""
+
+    def __init__(self, csv_path: str):
+        self._csv_path = csv_path
+        self._file = None
+        self._writer = None
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self._file = open(self._csv_path, "a", newline="")
+        self._writer = csv.writer(self._file)
+        # Write header only if file is empty
+        if self._file.tell() == 0:
+            self._writer.writerow(["timestamp", "step", "epoch", "loss", "learning_rate", "grad_norm"])
+        self._file.flush()
+
+    def on_log(self, args, state: TrainerState, control: TrainerControl, logs=None, **kwargs):
+        if not logs or self._writer is None:
+            return
+        loss = logs.get("loss")
+        if loss is None:
+            return
+        self._writer.writerow([
+            time.strftime("%Y-%m-%d %H:%M:%S"),
+            state.global_step,
+            round(state.epoch or 0, 4),
+            round(loss, 6),
+            round(logs.get("learning_rate", 0), 8),
+            round(logs.get("grad_norm", 0), 6),
+        ])
+        self._file.flush()
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if self._file:
+            self._file.close()
+
+
 # ── Training ──────────────────────────────────────────────────────────────────
 # Effective batch = per_device × grad_accum × world_size
 # Paper: batch=16. With 8 GPUs: per_device=2, grad_accum=1 → 2×1×8=16 ✓
@@ -452,13 +490,16 @@ training_args = TrainingArguments(
     remove_unused_columns=False,
 )
 
+_loss_csv_path = os.path.join(OUTPUT_DIR, "sft_loss.csv")
+callbacks = [VerboseEpochCallback(), LossLoggerCallback(_loss_csv_path)] if is_rank0 else []
+
 trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
     eval_dataset=test_dataset,
     data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer, padding=True),
-    callbacks=[VerboseEpochCallback()] if is_rank0 else [],
+    callbacks=callbacks,
 )
 
 # Auto-resume from latest checkpoint
