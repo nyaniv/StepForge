@@ -80,15 +80,19 @@ pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
 pip install flash-attn --no-build-isolation
 
 # Core training stack
-# trl==0.12.0: newer TRL requires FSDPModule from torch>=2.6; we have 2.5.1
-# unsloth_zoo also requires trl<=0.24.0, so 0.12.0 satisfies both constraints
+# trl==0.14.3: has GRPOTrainer (added in 0.13.0), no FSDPModule requirement (added in 0.15+)
+# unsloth_zoo requires trl<=0.24.0 — 0.14.3 satisfies all constraints
 pip install \
-    "trl==0.12.0" \
+    "trl==0.14.3" \
     "transformers>=4.51.3" \
     "peft>=0.10" \
     "accelerate>=0.30" \
     "datasets" \
     "bitsandbytes"
+
+# torchao conflicts with torch 2.5.1 (needs torch>=2.6 for torch.int1)
+# It gets pulled in by newer transformers — uninstall it explicitly
+pip uninstall torchao -y 2>/dev/null || true
 
 # Retrieval, reward, and utility (matches runpod_setup.sh)
 pip install \
