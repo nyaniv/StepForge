@@ -157,7 +157,11 @@ def build_rl_dataset(train_json: str, retriever: Retriever,
     earn non-zero reward on.
     """
     with open(train_json) as f:
-        records = json.load(f)   # JSON array, not JSONL
+        head = f.read(1); f.seek(0)
+        if head == "[":
+            records = json.load(f)
+        else:
+            records = [json.loads(l) for l in f if l.strip()]
     logger.info(f"Building RL dataset from {len(records)} examples (live RAG)...")
 
     data = []
@@ -307,7 +311,10 @@ def main():
     #     we don't race with accelerate's own distributed initialisation inside
     #     GRPOTrainer.
     max_completion_length = int(getattr(cfg.rl, "max_completion_length", 4096))
-    train_json = os.path.join(cfg.paths.processed_dir, "train.json")
+    # Support both main (train_with_rag.jsonl) and refined-variant (train.json) data formats
+    _train_json_jsonl = os.path.join(cfg.paths.processed_dir, "train_with_rag.jsonl")
+    _train_json_json  = os.path.join(cfg.paths.processed_dir, "train.json")
+    train_json = _train_json_jsonl if os.path.exists(_train_json_jsonl) else _train_json_json
     dataset_cache_path = os.path.join(cfg.paths.rl_checkpoint_dir, "rl_dataset_cache")
     dataset_done_flag  = dataset_cache_path + ".done"
 
@@ -369,7 +376,7 @@ def main():
         bf16=True,
         logging_steps=1,
         save_steps=20,
-        report_to="tensorboard",
+        report_to="none",
         seed=42,
         # remove_unused_columns=False is CRITICAL: GRPOTrainer passes reward
         # function kwargs from dataset columns.  The default (True) would silently
