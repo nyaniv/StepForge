@@ -77,6 +77,9 @@ python data/dfs_reserializer.py --config configs/config_gautschi.yaml
 echo "[4/6] Filtering dataset..."
 python data/filter_dataset.py --config configs/config_gautschi.yaml
 
+# torchao conflicts with torch 2.5.1 — uninstall before importing sentence_transformers
+pip uninstall torchao -y 2>/dev/null || true
+
 echo "[5/6] Building FAISS index..."
 python retrieval/build_index.py --config configs/config_gautschi.yaml
 
