@@ -28,6 +28,7 @@
 #SBATCH --partition=ai
 #SBATCH --account=lilly-agentic-gpu
 #SBATCH --requeue
+#SBATCH --qos=preemptible
 #SBATCH --signal=B:SIGUSR1@120
 
 # ── Source the module system ─────────────────────────────────────────────────

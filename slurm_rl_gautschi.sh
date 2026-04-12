@@ -9,9 +9,9 @@
 #   Here:    8×H100 × 1 prompt/GPU  × 8 gen/prompt = 64 sequences/step  ✓
 #   max_steps=80, lr=3e-6, kl_coef=0.02, entropy_coef=0.005
 #
-# Submit: sbatch slurm_rl_gautschi.sh
-# Check:  squeue -u $USER
-# Log:    tail -f $SCRATCH/stepforge/logs/rl_<JOBID>.out
+# Submit: sbatch slurm_rl_gautschi.sh [/path/to/sft/run]
+# Resume: sbatch slurm_rl_gautschi.sh [sft_ckpt] /path/to/existing/rl/run
+# Log:    tail -f $SCRATCH/stepforge/runs/rl_<JOBID>/slurm.out
 #
 # Automatic resubmission: SLURM sends SIGUSR1 120s before time limit;
 # the handler re-queues the job and GRPOTrainer resumes from the latest
@@ -30,6 +30,7 @@
 #SBATCH --partition=ai
 #SBATCH --account=lilly-agentic-gpu
 #SBATCH --requeue                   # allow requeue on preemption or time limit
+#SBATCH --qos=preemptible
 #SBATCH --signal=B:SIGUSR1@120      # warn 120 s before wall-time so we can resubmit
 # #SBATCH --account=YOUR_ACCOUNT   # uncomment and set if your allocation requires it
 
@@ -83,31 +84,40 @@ if "_LazyModule" not in txt2:
     print("Patched _LazyModule into trl/import_utils.py")
 PATCH
 
-# ── Ensure output directories exist ──────────────────────────────────────────
-mkdir -p "$SCRATCH/stepforge/logs"
-mkdir -p "$SCRATCH/stepforge/checkpoints/rl"
+# ── SFT checkpoint override ($1) and optional RL resume dir ($2) ─────────────
+SFT_CKPT_ARG=""
+if [ -n "${1:-}" ]; then
+    SFT_CKPT_ARG="--sft-checkpoint $1"
+    echo "Using SFT checkpoint: $1"
+fi
 
-# Redirect SLURM logs to scratch
-LOG_DIR="$SCRATCH/stepforge/logs"
-exec > >(tee -a "${LOG_DIR}/rl_${SLURM_JOB_ID}.out") 2>&1
+# ── Namespaced run directory ──────────────────────────────────────────────────
+if [ -n "${2:-}" ] && [ -d "$2" ]; then
+    RUN_DIR="$2"
+    echo "[$(date)] Resuming existing RL run: $RUN_DIR"
+else
+    RUN_DIR="$SCRATCH/stepforge/runs/rl_${SLURM_JOB_ID}"
+    mkdir -p "$RUN_DIR"
+    echo "[$(date)] New RL run directory: $RUN_DIR"
+fi
 
-# ── Signal handler: resubmit on approaching time limit ───────────────────────
+exec > >(tee -a "${RUN_DIR}/slurm.out") 2>&1
+
+# ── Signal handler ────────────────────────────────────────────────────────────
 _resubmit() {
     echo ""
-    echo "[$(date)] Time limit approaching — resubmitting job for checkpoint resume..."
-    # GRPOTrainer saves at save_steps=20; trainer.train(resume_from_checkpoint=...)
-    # will automatically pick up the latest checkpoint on the next run.
-    sbatch "${HOME}/StepForge/slurm_rl_gautschi.sh"
+    echo "[$(date)] Time limit approaching — resubmitting into same run dir: $RUN_DIR"
+    sbatch "${HOME}/StepForge/slurm_rl_gautschi.sh" "${1:-}" "$RUN_DIR"
     echo "[$(date)] Resubmit issued. Exiting current job gracefully."
     exit 0
 }
 trap _resubmit SIGUSR1
 
-# ── Job info ─────────────────────────────────────────────────────────────────
 echo "========================================"
 echo " StepForge RL (GRPO) — Gautschi"
 echo "========================================"
 echo " Job ID   : $SLURM_JOB_ID"
+echo " Run dir  : $RUN_DIR"
 echo " Node     : $(hostname)"
 echo " GPUs     : $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo 'unknown')"
 echo " World    : 8 processes (1 per GPU)"
@@ -121,15 +131,6 @@ cd "${HOME}/StepForge"
 echo "Running preflight environment check..."
 python training/preflight_check.py || { echo "PREFLIGHT FAILED — aborting job"; exit 1; }
 
-# ── Run RL via torchrun (8-GPU DDP) ─────────────────────────────────────────
-# Optional: pass --sft-checkpoint to override the default (sft/final).
-# Example: sbatch slurm_rl_gautschi.sh $SCRATCH/stepforge/checkpoints/sft/checkpoint-2465
-SFT_CKPT_ARG=""
-if [ -n "${1:-}" ]; then
-    SFT_CKPT_ARG="--sft-checkpoint $1"
-    echo "Using SFT checkpoint: $1"
-fi
-
 torchrun \
     --standalone \
     --nproc_per_node=8 \
@@ -137,9 +138,9 @@ torchrun \
         --config configs/config_gautschi.yaml \
         $SFT_CKPT_ARG &
 
-# Wait in the background so the SIGUSR1 trap can fire
 wait $!
+RL_EXIT=$?
 
 echo "========================================"
-echo " RL finished : $(date)"
+echo " RL finished : $(date)  (exit=$RL_EXIT)"
 echo "========================================"

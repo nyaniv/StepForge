@@ -1,27 +1,31 @@
 #!/bin/bash
 # =============================================================================
-# StepForge — 4-GPU SFT job for Gautschi (refined-variant branch)
-# Hardware:  4× NVIDIA H100 80GB
-# Effective batch: 4 per_device × 1 grad_accum × 4 GPUs = 16  (paper spec)
+# StepForge — RL (GRPO) job for Gautschi (refined-variant branch)
+# Hardware:  8× NVIDIA H100 80GB  (full Gautschi-H node)
+# DDP:       torchrun with 8 processes, 1 GPU each
 #
-# Submit:  sbatch slurm_sft_4gpu_refined_gautschi.sh
-# Resume:  sbatch slurm_sft_4gpu_refined_gautschi.sh /path/to/existing/run/dir
-# Log:     tail -f $SCRATCH/stepforge/runs/sft_4gpu_refined_<JOBID>/slurm.out
+# Paper match (Chen et al., 2026):
+#   Paper ran 4×H100 × 2 prompts/GPU × 8 gen/prompt = 64 sequences/step
+#   Here:    8×H100 × 1 prompt/GPU  × 8 gen/prompt = 64 sequences/step  ✓
+#   max_steps=80, lr=3e-6, kl_coef=0.02, entropy_coef=0.005
+#
+# Submit: sbatch slurm_rl_refined_gautschi.sh [/path/to/sft/run/dir]
+# Resume: sbatch slurm_rl_refined_gautschi.sh [sft_ckpt] /path/to/existing/rl/run/dir
+# Log:    tail -f $SCRATCH/stepforge/runs/rl_refined_<JOBID>/slurm.out
 # =============================================================================
-#SBATCH --job-name=stepforge_sft_4gpu_refined
+#SBATCH --job-name=stepforge_rl_refined
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
-#SBATCH --time=48:00:00
+#SBATCH --time=24:00:00
 #SBATCH --nodes=1
-#SBATCH --ntasks=4
-#SBATCH --ntasks-per-node=4
+#SBATCH --ntasks=8
+#SBATCH --ntasks-per-node=8
 #SBATCH --cpus-per-task=14
-#SBATCH --mem=400G
-#SBATCH --gres=gpu:4
+#SBATCH --mem=800G
+#SBATCH --gres=gpu:8
 #SBATCH --partition=ai
 #SBATCH --account=lilly-agentic-gpu
 #SBATCH --requeue
-#SBATCH --qos=preemptible
 #SBATCH --signal=B:SIGUSR1@120
 
 if [ -f /etc/profile.d/modules.sh ]; then
@@ -44,18 +48,6 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export NCCL_DEBUG=WARN
 export NCCL_IB_DISABLE=0
 export NCCL_SOCKET_IFNAME=^lo,docker
-
-# ── Namespaced run directory ──────────────────────────────────────────────────
-if [ -n "${1:-}" ] && [ -d "$1" ]; then
-    RUN_DIR="$1"
-    echo "[$(date)] Resuming existing run: $RUN_DIR"
-else
-    RUN_DIR="$SCRATCH/stepforge/runs/sft_4gpu_refined_${SLURM_JOB_ID}"
-    mkdir -p "$RUN_DIR"
-    echo "[$(date)] New run directory: $RUN_DIR"
-fi
-
-exec > >(tee -a "${RUN_DIR}/slurm.out") 2>&1
 
 # ── Dependency pins ───────────────────────────────────────────────────────────
 pip install -q "trl==0.14.0" "transformers==4.51.3"
@@ -80,25 +72,48 @@ if "_LazyModule" not in txt2:
     print("Patched _LazyModule into trl/import_utils.py")
 PATCH
 
+# ── SFT checkpoint arg ($1) and optional RL run-dir resume ($2) ───────────────
+# Usage:
+#   sbatch slurm_rl_refined_gautschi.sh                         # use config default SFT ckpt
+#   sbatch slurm_rl_refined_gautschi.sh /path/to/sft/run        # override SFT ckpt
+#   sbatch slurm_rl_refined_gautschi.sh "" /path/to/rl/run      # resume RL run (keep SFT ckpt default)
+#   sbatch slurm_rl_refined_gautschi.sh /sft/run /path/to/rl    # override SFT + resume RL
+SFT_CKPT_ARG=""
+if [ -n "${1:-}" ]; then
+    SFT_CKPT_ARG="--sft-checkpoint $1"
+    echo "Using SFT checkpoint: $1"
+fi
+
+# ── Namespaced run directory ──────────────────────────────────────────────────
+if [ -n "${2:-}" ] && [ -d "$2" ]; then
+    RUN_DIR="$2"
+    echo "[$(date)] Resuming existing RL run: $RUN_DIR"
+else
+    RUN_DIR="$SCRATCH/stepforge/runs/rl_refined_${SLURM_JOB_ID}"
+    mkdir -p "$RUN_DIR"
+    echo "[$(date)] New RL run directory: $RUN_DIR"
+fi
+
+exec > >(tee -a "${RUN_DIR}/slurm.out") 2>&1
+
 # ── Signal handler ────────────────────────────────────────────────────────────
 _resubmit() {
     echo ""
     echo "[$(date)] Time limit approaching — resubmitting into same run dir: $RUN_DIR"
-    sbatch "${HOME}/StepForge/slurm_sft_4gpu_refined_gautschi.sh" "$RUN_DIR"
+    sbatch "${HOME}/StepForge/slurm_rl_refined_gautschi.sh" "${1:-}" "$RUN_DIR"
     echo "[$(date)] Resubmit issued. Exiting current job gracefully."
     exit 0
 }
 trap _resubmit SIGUSR1
 
 echo "========================================"
-echo " StepForge SFT 4-GPU — refined-variant"
+echo " StepForge RL (GRPO) — refined-variant"
 echo "========================================"
 echo " Job ID   : $SLURM_JOB_ID"
 echo " Run dir  : $RUN_DIR"
 echo " Node     : $(hostname)"
 echo " GPUs     : $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo 'unknown')"
-echo " World    : 4 processes (1 per GPU)"
-echo " Eff batch: 4 × 1 × 4 = 16  (paper spec)"
+echo " World    : 8 processes (1 per GPU)"
 echo " Started  : $(date)"
 echo " Config   : configs/config_gautschi_refined.yaml"
 echo "========================================"
@@ -110,26 +125,14 @@ python training/preflight_check.py || { echo "PREFLIGHT FAILED — aborting job"
 
 torchrun \
     --standalone \
-    --nproc_per_node=4 \
-    training/sft_multigpu.py \
+    --nproc_per_node=8 \
+    training/rl_train.py \
         --config configs/config_gautschi_refined.yaml \
-        --output-dir "$RUN_DIR" \
-        --per-device-batch 4 &
+        $SFT_CKPT_ARG &
 
 wait $!
-SFT_EXIT=$?
+RL_EXIT=$?
 
 echo "========================================"
-echo " SFT 4-GPU refined finished : $(date)  (exit=$SFT_EXIT)"
+echo " RL refined finished : $(date)  (exit=$RL_EXIT)"
 echo "========================================"
-
-if [ $SFT_EXIT -eq 0 ]; then
-    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    FINAL_DIR="${RUN_DIR}/final"
-    SNAPSHOT_DIR="${RUN_DIR}/sft_weights_${TIMESTAMP}"
-    if [ -d "$FINAL_DIR" ]; then
-        echo "Saving timestamped weight snapshot to $SNAPSHOT_DIR ..."
-        cp -r "$FINAL_DIR" "$SNAPSHOT_DIR"
-        echo "Snapshot saved: $SNAPSHOT_DIR"
-    fi
-fi
