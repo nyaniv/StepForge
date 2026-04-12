@@ -223,6 +223,12 @@ def main():
         default=None,
         help="Path to SFT checkpoint (defaults to config.paths.sft_checkpoint_dir/final)",
     )
+    parser.add_argument("--max-steps", type=int, default=None,
+                        help="Override cfg.rl.max_steps (e.g. 3 for smoke tests)")
+    parser.add_argument("--num-generations", type=int, default=None,
+                        help="Override cfg.rl.num_generations (e.g. 2 for smoke tests)")
+    parser.add_argument("--use-quantization", action="store_true", default=None,
+                        help="Force 4-bit quantization (smoke test on small GPUs)")
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
@@ -234,11 +240,18 @@ def main():
     MAX_RETRIEVED_TOKENS = int(getattr(cfg.model, "max_retrieved_tokens",
                                        getattr(cfg.model, "max_seq_length", 16384)))
 
+    # ── CLI overrides (smoke test / debugging) ───────────────────────────────
+    if args.max_steps is not None:
+        cfg.rl.max_steps = args.max_steps
+    if args.num_generations is not None:
+        cfg.rl.num_generations = args.num_generations
+
     # ── Distributed context (set by torchrun on Gautschi) ───────────────────
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     is_distributed = world_size > 1
-    use_quantization = bool(getattr(cfg.model, "use_quantization", True))
+    use_quantization = args.use_quantization if args.use_quantization is not None \
+        else bool(getattr(cfg.model, "use_quantization", True))
 
     # ── File logging ─────────────────────────────────────────────────────────
     # Remove ALL existing handlers first (loguru adds a default stderr sink at

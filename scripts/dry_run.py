@@ -306,6 +306,7 @@ slurm_scripts = [
     "slurm_sft_4gpu_refined_gautschi.sh",
     "slurm_rl_gautschi.sh",
     "slurm_rl_refined_gautschi.sh",
+    "slurm_smoke_test.sh",
 ]
 for script in slurm_scripts:
     def make_check(s):

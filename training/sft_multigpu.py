@@ -67,6 +67,8 @@ parser.add_argument("--output-dir", default=None,
                     help="Override cfg.paths.sft_checkpoint_dir (used by SLURM for job-namespaced runs)")
 parser.add_argument("--per-device-batch", type=int, default=None,
                     help="Override cfg.sft.per_device_train_batch_size (e.g. 4 for 4-GPU runs)")
+parser.add_argument("--max-steps", type=int, default=None,
+                    help="Override num_train_epochs with a fixed step count (e.g. 20 for smoke tests)")
 args, _ = parser.parse_known_args()
 
 cfg_path = args.config if os.path.isabs(args.config) else os.path.join(
@@ -472,12 +474,14 @@ if is_rank0:
     logger.info(f"Effective batch size: {per_device_batch} × {grad_accum} × {world_size} = {effective_batch}")
     logger.info(f"epochs={cfg.sft.num_epochs}  lr={cfg.sft.learning_rate}  optim={cfg.sft.optim}")
 
+_smoke = args.max_steps is not None
 training_args = TrainingArguments(
     output_dir=OUTPUT_DIR,
     per_device_train_batch_size=per_device_batch,
     gradient_accumulation_steps=grad_accum,
     gradient_checkpointing=True,
     num_train_epochs=cfg.sft.num_epochs,
+    max_steps=args.max_steps if _smoke else -1,  # >0 overrides num_train_epochs
     learning_rate=cfg.sft.learning_rate,
     warmup_ratio=cfg.sft.warmup_ratio,
     lr_scheduler_type="linear",
@@ -485,8 +489,9 @@ training_args = TrainingArguments(
     optim=cfg.sft.optim,
     weight_decay=0.01,
     logging_steps=10,
-    save_strategy="epoch",
-    eval_strategy="epoch",
+    save_strategy="steps" if _smoke else "epoch",
+    save_steps=10 if _smoke else 500,
+    eval_strategy="no" if _smoke else "epoch",
     report_to="none",
     seed=3407,
     ddp_find_unused_parameters=False,
