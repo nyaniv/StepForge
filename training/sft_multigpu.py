@@ -197,7 +197,6 @@ def formatting_prompts_func(examples):
             )
         labels = [-100] * response_start + input_ids[response_start:]
 
-        _fmt_stats["seq_lengths"].append(len(input_ids))
         all_input_ids.append(input_ids)
         all_attention_masks.append(attention_mask)
         all_labels.append(labels)

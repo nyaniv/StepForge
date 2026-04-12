@@ -271,9 +271,10 @@ def main():
     _train_start = time.time()
     # ── End file logging ─────────────────────────────────────────────────────
 
-    hf_token = os.environ.get("HUGGINGFACE_TOKEN")
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not hf_token:
-        raise EnvironmentError("HUGGINGFACE_TOKEN environment variable not set.")
+        raise EnvironmentError("HF_TOKEN environment variable not set.")
+    os.environ["HF_TOKEN"] = hf_token  # ensure HF library picks it up
 
     sft_checkpoint = args.sft_checkpoint or os.path.join(
         cfg.paths.sft_checkpoint_dir, "final"
