@@ -50,6 +50,7 @@ conda activate stepforge
 
 # ── Environment variables ────────────────────────────────────────────────────
 export HUGGINGFACE_TOKEN="${HUGGINGFACE_TOKEN:?Set HUGGINGFACE_TOKEN before submitting}"
+export HF_TOKEN="$HUGGINGFACE_TOKEN"
 export HF_HOME="$SCRATCH/.hf-cache"
 export PYTHONPATH="${HOME}/StepForge:${PYTHONPATH:-}"
 export KMP_DUPLICATE_LIB_OK=TRUE
