@@ -17,8 +17,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=14
-#SBATCH --mem=60G
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=120G
 #SBATCH --gres=gpu:1
 #SBATCH --partition=smallgpu
 #SBATCH --account=lilly-agentic-gpu
