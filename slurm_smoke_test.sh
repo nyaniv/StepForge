@@ -15,11 +15,11 @@
 #SBATCH --error=%x_%j.err
 #SBATCH --time=00:30:00
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks=2
+#SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=64
-#SBATCH --mem=120G
-#SBATCH --gres=gpu:1
+#SBATCH --mem=240G
+#SBATCH --gres=gpu:2
 #SBATCH --partition=smallgpu
 #SBATCH --account=lilly-agentic-gpu
 
@@ -82,10 +82,10 @@ if "_LazyModule" not in txt2:
     print("Patched _LazyModule into trl/import_utils.py")
 PATCH
 
-# ── Phase 1: SFT smoke test (20 steps, 1 GPU) ────────────────────────────────
+# ── Phase 1a: SFT smoke test (20 steps, 1 GPU) ───────────────────────────────
 echo ""
 echo "========================================"
-echo " Phase 1: SFT — 20 steps"
+echo " Phase 1a: SFT — 20 steps, 1 GPU"
 echo "========================================"
 
 SFT_DIR="${RUN_DIR}/sft_smoke"
@@ -99,11 +99,38 @@ torchrun \
         --max-steps 20
 
 SFT_EXIT=$?
-echo " SFT smoke finished: $(date)  (exit=$SFT_EXIT)"
+echo " SFT 1-GPU finished: $(date)  (exit=$SFT_EXIT)"
 
 if [ $SFT_EXIT -ne 0 ]; then
-    echo "SMOKE TEST FAILED at SFT phase (exit=$SFT_EXIT)"
+    echo "SMOKE TEST FAILED at SFT 1-GPU phase (exit=$SFT_EXIT)"
     exit $SFT_EXIT
+fi
+
+# ── Phase 1b: SFT DDP smoke test (10 steps, 2 GPU) ───────────────────────────
+# Tests: NCCL init, rank-0 dataset barrier, DDP gradient sync, multi-rank logging
+echo ""
+echo "========================================"
+echo " Phase 1b: SFT DDP — 10 steps, 2 GPUs"
+echo "========================================"
+
+SFT_DDP_DIR="${RUN_DIR}/sft_ddp_smoke"
+# Clear any leftover dataset-ready flag from phase 1a so rank 1 waits properly
+rm -f "${SFT_DDP_DIR}/.dataset_ready"
+torchrun \
+    --standalone \
+    --nproc_per_node=2 \
+    training/sft_multigpu.py \
+        --config configs/config_gautschi.yaml \
+        --output-dir "$SFT_DDP_DIR" \
+        --per-device-batch 1 \
+        --max-steps 10
+
+SFT_DDP_EXIT=$?
+echo " SFT 2-GPU DDP finished: $(date)  (exit=$SFT_DDP_EXIT)"
+
+if [ $SFT_DDP_EXIT -ne 0 ]; then
+    echo "SMOKE TEST FAILED at SFT DDP phase (exit=$SFT_DDP_EXIT)"
+    exit $SFT_DDP_EXIT
 fi
 
 # Find the saved checkpoint

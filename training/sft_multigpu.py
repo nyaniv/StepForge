@@ -471,6 +471,11 @@ training_args = TrainingArguments(
 _loss_csv_path = os.path.join(OUTPUT_DIR, "sft_loss.csv")
 callbacks = [VerboseEpochCallback(), LossLoggerCallback(_loss_csv_path)] if is_rank0 else []
 
+# Keep only the columns the DataCollator needs — drop uid, text, caption, etc.
+_KEEP_COLS = {"input_ids", "attention_mask", "labels"}
+dataset      = dataset.remove_columns([c for c in dataset.column_names      if c not in _KEEP_COLS])
+test_dataset = test_dataset.remove_columns([c for c in test_dataset.column_names if c not in _KEEP_COLS])
+
 trainer = Trainer(
     model=model,
     args=training_args,
