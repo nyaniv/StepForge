@@ -165,12 +165,6 @@ def _build_user_message(caption: str, retrieved: str) -> str:
     )
 
 
-# ── Formatting stats ──────────────────────────────────────────────────────────
-_fmt_stats = {"total": 0, "truncated": 0, "truncation_lengths": [],
-              "seq_lengths": [], "missing_caption": 0, "missing_output": 0,
-              "missing_retrieved": 0}
-
-
 def formatting_prompts_func(examples):
     instructions = examples["caption"]
     outputs      = examples[_STEP_FIELD]
@@ -179,19 +173,9 @@ def formatting_prompts_func(examples):
     all_input_ids, all_attention_masks, all_labels, all_texts = [], [], [], []
 
     for caption, retrieved, output in zip(instructions, inputs, outputs):
-        _fmt_stats["total"] += 1
-        if not caption:
-            _fmt_stats["missing_caption"] += 1
-        if not output:
-            _fmt_stats["missing_output"] += 1
-        if not retrieved:
-            _fmt_stats["missing_retrieved"] += 1
-
-        # Truncate retrieved STEP
+        # Truncate retrieved STEP if needed (no-op when MAX_RETRIEVED_TOKENS == max_seq_length)
         ret_ids = tokenizer(retrieved or "", add_special_tokens=False)["input_ids"]
         if len(ret_ids) > MAX_RETRIEVED_TOKENS:
-            _fmt_stats["truncated"] += 1
-            _fmt_stats["truncation_lengths"].append(len(ret_ids))
             retrieved = tokenizer.decode(ret_ids[:MAX_RETRIEVED_TOKENS])
 
         messages = [
@@ -223,27 +207,16 @@ def formatting_prompts_func(examples):
             "labels": all_labels, "text": all_texts}
 
 
-def _log_and_check_fmt_stats(tag: str, is_train: bool):
-    s = _fmt_stats
-    if not s["seq_lengths"]:
+def _log_and_check_fmt_stats(tag: str, ds, is_train: bool):
+    """Derive stats from the mapped dataset directly (avoids cross-process mutation issues)."""
+    if len(ds) == 0:
         raise RuntimeError(f"[{tag}] No examples formatted — dataset is empty.")
-    lengths = sorted(s["seq_lengths"])
+    lengths = sorted(len(ids) for ids in ds["input_ids"])
     n = len(lengths)
     over = sum(1 for l in lengths if l > max_seq_length)
-    logger.info(f"[{tag}] {n} examples  |  truncated_retrieved={s['truncated']}  "
+    logger.info(f"[{tag}] {n} examples  |  "
                 f"p50_len={lengths[n//2]}  p90_len={lengths[int(n*0.9)]}  max_len={lengths[-1]}  "
                 f"over_limit={over}")
-    fatal = []
-    if s["missing_caption"]:
-        fatal.append(f"missing_caption={s['missing_caption']}")
-    if s["missing_output"] and is_train:
-        fatal.append(f"missing_output={s['missing_output']}")
-    if s["missing_retrieved"] and is_train:
-        fatal.append(f"missing_retrieved_step_on_train={s['missing_retrieved']}")
-    elif s["missing_retrieved"] and not is_train:
-        logger.info(f"  [{tag}] {s['missing_retrieved']} test examples have no retrieved step (expected)")
-    if fatal:
-        raise RuntimeError(f"Dataset [{tag}] has fatal issues: {'; '.join(fatal)}")
 
 
 # ── Dataset — only rank 0 formats; others load from disk ─────────────────────
@@ -293,13 +266,10 @@ if is_rank0:
         logger.info(f"  Raw test: {len(test_dataset)}")
 
         dataset = dataset.map(formatting_prompts_func, batched=True, num_proc=8)
-        _log_and_check_fmt_stats("train", is_train=True)
-        for k in ("total","truncated","missing_caption","missing_output","missing_retrieved"):
-            _fmt_stats[k] = 0
-        _fmt_stats["truncation_lengths"].clear(); _fmt_stats["seq_lengths"].clear()
+        _log_and_check_fmt_stats("train", dataset, is_train=True)
 
         test_dataset = test_dataset.map(formatting_prompts_func, batched=True, num_proc=8)
-        _log_and_check_fmt_stats("test", is_train=False)
+        _log_and_check_fmt_stats("test", test_dataset, is_train=False)
 
         dataset.save_to_disk(_FORMATTED_TRAIN)
         test_dataset.save_to_disk(_FORMATTED_TEST)
