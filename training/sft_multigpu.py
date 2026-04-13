@@ -451,6 +451,7 @@ training_args = TrainingArguments(
     per_device_train_batch_size=per_device_batch,
     gradient_accumulation_steps=grad_accum,
     gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={"use_reentrant": False},
     num_train_epochs=cfg.sft.num_epochs,
     max_steps=args.max_steps if _smoke else -1,  # >0 overrides num_train_epochs
     learning_rate=cfg.sft.learning_rate,
