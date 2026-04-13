@@ -161,6 +161,7 @@ torchrun \
     training/rl_train.py \
         --config configs/config_gautschi.yaml \
         --sft-checkpoint "$SFT_CKPT" \
+        --output-dir "$RL_DIR" \
         --max-steps 3 \
         --num-generations 2 \
         --use-quantization

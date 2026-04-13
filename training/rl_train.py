@@ -229,6 +229,8 @@ def main():
                         help="Override cfg.rl.num_generations (e.g. 2 for smoke tests)")
     parser.add_argument("--use-quantization", action="store_true", default=None,
                         help="Force 4-bit quantization (smoke test on small GPUs)")
+    parser.add_argument("--output-dir", default=None,
+                        help="Override cfg.paths.rl_checkpoint_dir (e.g. smoke test run dir)")
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
@@ -245,6 +247,8 @@ def main():
         cfg.rl.max_steps = args.max_steps
     if args.num_generations is not None:
         cfg.rl.num_generations = args.num_generations
+    if args.output_dir is not None:
+        cfg.paths.rl_checkpoint_dir = args.output_dir
 
     # ── Distributed context (set by torchrun on Gautschi) ───────────────────
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
