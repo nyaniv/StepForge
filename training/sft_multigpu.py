@@ -67,7 +67,9 @@ parser.add_argument("--config", default="configs/config_gautschi.yaml")
 parser.add_argument("--output-dir", default=None,
                     help="Override cfg.paths.sft_checkpoint_dir (used by SLURM for job-namespaced runs)")
 parser.add_argument("--per-device-batch", type=int, default=None,
-                    help="Override cfg.sft.per_device_train_batch_size (e.g. 4 for 4-GPU runs)")
+                    help="Override cfg.sft.per_device_train_batch_size")
+parser.add_argument("--grad-accum", type=int, default=None,
+                    help="Override cfg.sft.gradient_accumulation_steps")
 parser.add_argument("--max-steps", type=int, default=None,
                     help="Override num_train_epochs with a fixed step count (e.g. 20 for smoke tests)")
 args, _ = parser.parse_known_args()
@@ -437,7 +439,7 @@ class LossLoggerCallback(TrainerCallback):
 # Effective batch = per_device × grad_accum × world_size
 # Paper: batch=16. With 8 GPUs: per_device=2, grad_accum=1 → 2×1×8=16 ✓
 per_device_batch = args.per_device_batch or cfg.sft.per_device_train_batch_size
-grad_accum       = cfg.sft.gradient_accumulation_steps
+grad_accum       = args.grad_accum or cfg.sft.gradient_accumulation_steps
 effective_batch  = per_device_batch * grad_accum * world_size
 
 if is_rank0:

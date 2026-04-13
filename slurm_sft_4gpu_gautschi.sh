@@ -14,7 +14,7 @@
 #SBATCH --job-name=stepforge_sft_4gpu
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
-#SBATCH --time=48:00:00
+#SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=4
 #SBATCH --ntasks-per-node=4
@@ -118,7 +118,8 @@ torchrun \
     training/sft_multigpu.py \
         --config configs/config_gautschi.yaml \
         --output-dir "$RUN_DIR" \
-        --per-device-batch 4 &
+        --per-device-batch 1 \
+        --grad-accum 4 &
 
 wait $!
 SFT_EXIT=$?
