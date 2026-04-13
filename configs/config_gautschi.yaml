@@ -39,7 +39,7 @@ model:
   # max_seq_length is NOT stated in the paper.  We use 16384 so the full retrieved
   # STEP file fits without truncation — the paper does not truncate retrieved context.
   # H100 80GB + FlashAttention-2 handles 16K without OOM.
-  max_seq_length: 16384
+  max_seq_length: 14336
   # LoRA r/alpha are NOT stated in the paper; these come from the implementation plan.
   lora_r: 16
   lora_alpha: 32

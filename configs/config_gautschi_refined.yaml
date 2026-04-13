@@ -23,7 +23,7 @@ data:
 
 model:
   base_model: "meta-llama/Llama-3.2-3B-Instruct"
-  max_seq_length: 16384
+  max_seq_length: 14336
   lora_r: 16
   lora_alpha: 32
   lora_dropout: 0.0
