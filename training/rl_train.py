@@ -103,7 +103,12 @@ def format_reward_fn(completions: list[str], **kwargs) -> list[float]:
     model to learn to terminate with END-ISO-10303-21; before the geometric
     reward can kick in.
     """
-    return [0.2 if "END-ISO-10303-21;" in c else 0.0 for c in completions]
+    rewards = [0.2 if "END-ISO-10303-21;" in c else 0.0 for c in completions]
+    # Debug: log first completion so we can verify what the model is generating
+    if completions:
+        logger.debug(f"[format_reward] completion[0][:200]: {repr(completions[0][:200])}")
+        logger.debug(f"[format_reward] rewards: {rewards}")
+    return rewards
 
 
 # ── Geometry reward ────────────────────────────────────────────────────────────
