@@ -343,6 +343,7 @@ lora_config = LoraConfig(
     task_type="CAUSAL_LM",
 )
 model = get_peft_model(model, lora_config)
+model.enable_input_require_grads()
 if is_rank0:
     model.print_trainable_parameters()
     logger.info(f"LoRA: r={cfg.model.lora_r}  alpha={cfg.model.lora_alpha}")
