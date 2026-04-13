@@ -51,9 +51,9 @@ model:
 sft:
   # All values below are FROM THE PAPER (Section 4.1).
   # 8× H100 80GB via torchrun DDP (sft_multigpu.py).
-  # Effective batch = per_device × grad_accum × world_size = 2 × 1 × 8 = 16  (paper: "effective batch size of 16")
-  per_device_train_batch_size: 2
-  gradient_accumulation_steps: 1
+  # Effective batch = per_device × grad_accum × world_size = 1 × 2 × 8 = 16  (paper: "effective batch size of 16")
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 2
   learning_rate: 2.0e-4      # paper Section 4.1: "learning rate of 2e-4"
   num_epochs: 10             # paper Section 4.1: "trained for 10 epochs"
   warmup_ratio: 0.05         # paper Section 4.1: "warm-up of 5% of the total training steps"
