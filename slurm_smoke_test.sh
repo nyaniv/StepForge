@@ -166,8 +166,7 @@ torchrun \
         --sft-checkpoint "$SFT_CKPT" \
         --output-dir "$RL_DIR" \
         --max-steps 3 \
-        --num-generations 2 \
-        --use-quantization
+        --num-generations 2
 
 RL_EXIT=$?
 echo " RL smoke finished: $(date)  (exit=$RL_EXIT)"
