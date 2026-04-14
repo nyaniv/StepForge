@@ -57,7 +57,7 @@ sft:
   learning_rate: 2.0e-4      # paper Section 4.1: "learning rate of 2e-4"
   num_epochs: 10             # paper Section 4.1: "trained for 10 epochs"
   warmup_ratio: 0.05         # paper Section 4.1: "warm-up of 5% of the total training steps"
-  optim: "adamw_8bit"        # paper Section 4.1: "AdamW (8-bit) optimizer"
+  optim: "paged_adamw_8bit"  # paper Section 4.1: "AdamW (8-bit) optimizer"
 
 rl:
   # All values below are FROM THE PAPER (Section 4.4) unless marked otherwise.

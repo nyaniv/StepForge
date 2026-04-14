@@ -457,7 +457,7 @@ effective_batch  = per_device_batch * grad_accum * world_size
 
 if is_rank0:
     logger.info(f"Effective batch size: {per_device_batch} × {grad_accum} × {world_size} = {effective_batch}")
-    _optim_name = "adamw_torch_fused" if world_size > 1 else cfg.sft.optim
+    _optim_name = cfg.sft.optim
     logger.info(f"epochs={cfg.sft.num_epochs}  lr={cfg.sft.learning_rate}  optim={_optim_name}")
 
 _smoke = args.max_steps is not None
@@ -473,7 +473,7 @@ training_args = TrainingArguments(
     warmup_ratio=cfg.sft.warmup_ratio,
     lr_scheduler_type="linear",
     bf16=True,
-    optim="adamw_torch_fused" if world_size > 1 else cfg.sft.optim,
+    optim=cfg.sft.optim,
     weight_decay=0.01,
     logging_steps=10,
     save_strategy="steps",
