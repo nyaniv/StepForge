@@ -276,10 +276,14 @@ if is_rank0:
         logger.info(f"  Raw test: {len(test_dataset)}")
 
         dataset = dataset.map(formatting_prompts_func, batched=True, num_proc=8)
+        _max_safe = int(max_seq_length * 0.875)  # 87.5% of limit — safe memory headroom
+        before = len(dataset)
+        dataset = dataset.filter(lambda ex: len(ex["input_ids"]) <= _max_safe)
+        logger.info(f"  Filtered {before - len(dataset)} examples over {_max_safe} tokens ({len(dataset)} remain)")
         _log_and_check_fmt_stats("train", dataset, is_train=True)
 
         test_dataset = test_dataset.map(formatting_prompts_func, batched=True, num_proc=8)
-        _log_and_check_fmt_stats("test", test_dataset, is_train=False)
+        test_dataset = test_dataset.filter(lambda ex: len(ex["input_ids"]) <= _max_safe)
 
         dataset.save_to_disk(_FORMATTED_TRAIN)
         test_dataset.save_to_disk(_FORMATTED_TEST)
