@@ -41,6 +41,14 @@ import math
 import time
 
 import torch
+# HF Trainer loads optimizer.pt with torch.load; newer PyTorch defaults weights_only=True
+# which breaks on optimizer state dicts. Override to maintain backward compatibility.
+_torch_load_orig = torch.load
+def _torch_load_compat(*args, **kwargs):
+    kwargs.setdefault("weights_only", False)
+    return _torch_load_orig(*args, **kwargs)
+torch.load = _torch_load_compat
+
 from datasets import Dataset
 from loguru import logger
 from omegaconf import OmegaConf
