@@ -192,6 +192,11 @@ def formatting_prompts_func(examples):
         input_ids      = encoded["input_ids"]
         attention_mask = encoded["attention_mask"]
 
+        # Drop examples that hit the truncation limit — truncated STEP outputs
+        # produce incomplete training signal and long sequences cause OOM.
+        if len(input_ids) >= max_seq_length:
+            continue
+
         response_start = _find_response_start(input_ids)
         if response_start == -1:
             raise RuntimeError(
