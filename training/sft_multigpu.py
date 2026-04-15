@@ -276,14 +276,9 @@ if is_rank0:
         logger.info(f"  Raw test: {len(test_dataset)}")
 
         dataset = dataset.map(formatting_prompts_func, batched=True, num_proc=8)
-        _max_safe = int(max_seq_length * 0.875)  # 87.5% of limit — safe memory headroom
-        before = len(dataset)
-        dataset = dataset.filter(lambda ex: len(ex["input_ids"]) <= _max_safe)
-        logger.info(f"  Filtered {before - len(dataset)} examples over {_max_safe} tokens ({len(dataset)} remain)")
         _log_and_check_fmt_stats("train", dataset, is_train=True)
 
         test_dataset = test_dataset.map(formatting_prompts_func, batched=True, num_proc=8)
-        test_dataset = test_dataset.filter(lambda ex: len(ex["input_ids"]) <= _max_safe)
 
         dataset.save_to_disk(_FORMATTED_TRAIN)
         test_dataset.save_to_disk(_FORMATTED_TEST)
@@ -411,6 +406,59 @@ class VerboseEpochCallback(TrainerCallback):
             logger.info(f"{'='*60}")
 
 
+class MemoryMonitorCallback(TrainerCallback):
+    """Logs GPU memory every N steps: allocated, reserved, peak since last reset, fragmentation %.
+    Resets peak counter after each log so you see per-interval highs, not the all-time high."""
+
+    def __init__(self, log_every: int = 50):
+        self._log_every = log_every
+
+    def _log(self, tag: str, step: int):
+        alloc  = torch.cuda.memory_allocated()    / 1024**3
+        reserv = torch.cuda.memory_reserved()     / 1024**3
+        peak   = torch.cuda.max_memory_allocated() / 1024**3
+        frag   = (reserv - alloc) / reserv if reserv > 0 else 0.0
+        logger.info(
+            f"[mem {tag} step={step}] "
+            f"alloc={alloc:.2f}GB  reserved={reserv:.2f}GB  "
+            f"peak_interval={peak:.2f}GB  frag={frag*100:.1f}%  waste={reserv-alloc:.2f}GB"
+        )
+        torch.cuda.reset_peak_memory_stats()
+
+    def on_epoch_begin(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+        self._log("epoch_begin", state.global_step)
+
+    def on_step_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+        if state.global_step % self._log_every == 0:
+            self._log("step", state.global_step)
+
+    def on_epoch_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+        self._log("epoch_end", state.global_step)
+
+
+class SeqLenLoggingCollator:
+    """Wraps DataCollatorForSeq2Seq to log padded batch sequence length every N calls (rank 0 only).
+    Helps correlate memory spikes with long sequences landing in a batch."""
+
+    def __init__(self, base_collator, log_every: int = 50):
+        self._base = base_collator
+        self._log_every = log_every
+        self._call_count = 0
+
+    def __call__(self, features):
+        batch = self._base(features)
+        if is_rank0:
+            self._call_count += 1
+            if self._call_count % self._log_every == 0:
+                ids = batch["input_ids"]
+                seq_len = ids.shape[1] if hasattr(ids, "shape") else len(ids[0])
+                logger.info(
+                    f"[collator call={self._call_count}] "
+                    f"padded_seq_len={seq_len}  batch_size={len(features)}"
+                )
+        return batch
+
+
 class LossLoggerCallback(TrainerCallback):
     """Writes every logged step to a CSV for easy plotting later."""
 
@@ -480,6 +528,8 @@ training_args = TrainingArguments(
     save_steps=10 if _smoke else 250,
     save_total_limit=3,
     eval_strategy="no" if _smoke else "epoch",
+    per_device_eval_batch_size=1,
+    eval_accumulation_steps=1,
     report_to="none",
     seed=3407,
     ddp_find_unused_parameters=False,
@@ -488,19 +538,22 @@ training_args = TrainingArguments(
 )
 
 _loss_csv_path = os.path.join(OUTPUT_DIR, "sft_loss.csv")
-callbacks = [VerboseEpochCallback(), LossLoggerCallback(_loss_csv_path)] if is_rank0 else []
+callbacks = [VerboseEpochCallback(), LossLoggerCallback(_loss_csv_path), MemoryMonitorCallback(log_every=50)] if is_rank0 else []
 
 # Keep only the columns the DataCollator needs — drop uid, text, caption, etc.
 _KEEP_COLS = {"input_ids", "attention_mask", "labels"}
 dataset      = dataset.remove_columns([c for c in dataset.column_names      if c not in _KEEP_COLS])
 test_dataset = test_dataset.remove_columns([c for c in test_dataset.column_names if c not in _KEEP_COLS])
 
+_base_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, padding=True)
+_collator = SeqLenLoggingCollator(_base_collator, log_every=50) if is_rank0 else _base_collator
+
 trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
     eval_dataset=test_dataset,
-    data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer, padding=True),
+    data_collator=_collator,
     callbacks=callbacks,
 )
 
@@ -516,7 +569,24 @@ if is_rank0:
 if is_rank0:
     logger.info("Starting SFT training...")
 _train_start = time.time()
-trainer.train(resume_from_checkpoint=_resume_from)
+try:
+    trainer.train(resume_from_checkpoint=_resume_from)
+except Exception as e:
+    _oom = "out of memory" in str(e).lower()
+    _step = trainer.state.global_step if hasattr(trainer, "state") else -1
+    _alloc  = torch.cuda.memory_allocated()  / 1024**3
+    _reserv = torch.cuda.memory_reserved()   / 1024**3
+    _peak   = torch.cuda.max_memory_allocated() / 1024**3
+    logger.error(f"{'OOM' if _oom else 'ERROR'} at step={_step}: {e}")
+    logger.error(f"  alloc={_alloc:.2f}GB  reserved={_reserv:.2f}GB  peak={_peak:.2f}GB  waste={_reserv-_alloc:.2f}GB")
+    if is_rank0 and _oom:
+        import json as _json
+        _snap = {k: v for k, v in torch.cuda.memory_stats().items() if isinstance(v, (int, float))}
+        _snap_path = os.path.join(OUTPUT_DIR, f"oom_memory_stats_step{_step}.json")
+        with open(_snap_path, "w") as _sf:
+            _json.dump({"step": _step, "allocated_gb": _alloc, "reserved_gb": _reserv, **_snap}, _sf, indent=2)
+        logger.error(f"  Memory stats saved → {_snap_path}")
+    raise
 _train_total = time.time() - _train_start
 
 if is_rank0:
