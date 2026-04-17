@@ -176,7 +176,8 @@ def load_model_and_tokenizer(run_dir: str):
     return model, tok, ckpt, epoch_approx
 
 
-def run_inference(model, tok, caption: str, retrieved: str, max_new_tokens: int = 600) -> str:
+def run_inference(model, tok, caption: str, retrieved: str,
+                  max_new_tokens: int = None, max_seq_length: int = 14336) -> str:
     prompt = (
         f"{SYSTEM_PROMPT}\n\n"
         f"### caption:\n{caption}\n\n"
@@ -185,6 +186,11 @@ def run_inference(model, tok, caption: str, retrieved: str, max_new_tokens: int 
     msgs = [{"role": "user", "content": prompt}]
     text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
     ids = tok(text, return_tensors="pt").to("cuda")
+    prompt_len = ids.input_ids.shape[1]
+    if max_new_tokens is None:
+        # Fill remaining context budget; leave 64-token safety margin
+        max_new_tokens = max(256, max_seq_length - prompt_len - 64)
+    print(f"    prompt_len={prompt_len}, max_new_tokens={max_new_tokens}")
     with torch.no_grad():
         out = model.generate(**ids, max_new_tokens=max_new_tokens,
                              do_sample=False, temperature=1.0, top_p=1.0)
@@ -322,7 +328,7 @@ def render_html(results: list, ckpt_path: str, epoch_label: str, run_dir: str) -
     <li>All outputs produce valid <code>ISO-10303-21</code> / <code>CONFIG_CONTROL_DESIGN</code> STEP headers</li>
     <li>Entity vocabulary matches training data: <code>ADVANCED_BREP_SHAPE_REPRESENTATION</code>, <code>MANIFOLD_SOLID_BREP</code>, <code>CLOSED_SHELL</code>, <code>ADVANCED_FACE</code></li>
     <li>Topology adapts to caption: plate (4 holes) generates 6 faces vs cylinder's 3 faces — model is not purely copying the retrieved file</li>
-    <li>Outputs generated with <code>max_new_tokens=6000</code>; truncated outputs indicate the model did not emit <code>END-ISO-10303-21;</code> by that limit</li>
+    <li>Generation budget: full remaining context after prompt (up to 14,336 tokens total); truncated outputs indicate the model did not emit <code>END-ISO-10303-21;</code> within the available budget</li>
     <li>Training continues to epoch 10; further improvement in geometric accuracy expected</li>
   </ul>
 </body>
@@ -335,7 +341,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--out",     default="inference_report.html")
-    parser.add_argument("--max-new-tokens", type=int, default=6000)
+    parser.add_argument("--max-new-tokens", type=int, default=None,
+                        help="Max new tokens per generation. Default: fill remaining context up to max_seq_length=14336.")
     args = parser.parse_args()
 
     # Load training data for retrieved examples
