@@ -141,7 +141,7 @@ def parse_step_topology(text: str) -> dict:
 
 # ── Model loading ─────────────────────────────────────────────────────────────
 
-def load_model_and_tokenizer(run_dir: str):
+def load_model_and_tokenizer(run_dir: str, checkpoint: str = None):
     scratch = os.environ.get("SCRATCH", "")
     hf_cache = os.path.join(scratch, ".hf-cache/hub/models--meta-llama--Llama-3.2-3B-Instruct/snapshots")
     snapshots = os.listdir(hf_cache)
@@ -151,8 +151,14 @@ def load_model_and_tokenizer(run_dir: str):
         [d for d in os.scandir(run_dir) if d.name.startswith("checkpoint-")],
         key=lambda x: int(x.name.split("-")[1])
     )
-    ckpt = ckpts[-1].path
-    step_num = int(ckpts[-1].name.split("-")[1])
+    if checkpoint:
+        ckpt = os.path.join(run_dir, checkpoint)
+        if not os.path.isdir(ckpt):
+            raise ValueError(f"Checkpoint not found: {ckpt}")
+        step_num = int(checkpoint.split("-")[1])
+    else:
+        ckpt = ckpts[-1].path
+        step_num = int(ckpts[-1].name.split("-")[1])
 
     # Read actual epoch from trainer_state.json if present
     state_path = os.path.join(ckpt, "trainer_state.json")
@@ -344,6 +350,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--out",     default="inference_report.html")
+    parser.add_argument("--checkpoint", default=None,
+                        help="Specific checkpoint directory to use (e.g. checkpoint-17250). Default: latest.")
     parser.add_argument("--max-new-tokens", type=int, default=None,
                         help="Max new tokens per generation. Default: fill remaining context up to max_seq_length=14336.")
     args = parser.parse_args()
@@ -360,7 +368,7 @@ def main():
         "train_example_2": ex2,
     }
 
-    model, tok, ckpt, epoch_label = load_model_and_tokenizer(args.run_dir)
+    model, tok, ckpt, epoch_label = load_model_and_tokenizer(args.run_dir, args.checkpoint)
 
     results = []
     for tc in TEST_CASES:
