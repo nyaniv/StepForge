@@ -322,7 +322,7 @@ def render_html(results: list, ckpt_path: str, epoch_label: str, run_dir: str) -
     <li>All outputs produce valid <code>ISO-10303-21</code> / <code>CONFIG_CONTROL_DESIGN</code> STEP headers</li>
     <li>Entity vocabulary matches training data: <code>ADVANCED_BREP_SHAPE_REPRESENTATION</code>, <code>MANIFOLD_SOLID_BREP</code>, <code>CLOSED_SHELL</code>, <code>ADVANCED_FACE</code></li>
     <li>Topology adapts to caption: plate (4 holes) generates 6 faces vs cylinder's 3 faces — model is not purely copying the retrieved file</li>
-    <li>Outputs are truncated due to <code>max_new_tokens=600</code>; full STEP files are 3,000–15,000 tokens</li>
+    <li>Outputs generated with <code>max_new_tokens=6000</code>; truncated outputs indicate the model did not emit <code>END-ISO-10303-21;</code> by that limit</li>
     <li>Training continues to epoch 10; further improvement in geometric accuracy expected</li>
   </ul>
 </body>
@@ -335,7 +335,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--out",     default="inference_report.html")
-    parser.add_argument("--max-new-tokens", type=int, default=600)
+    parser.add_argument("--max-new-tokens", type=int, default=6000)
     args = parser.parse_args()
 
     # Load training data for retrieved examples
