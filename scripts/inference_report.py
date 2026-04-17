@@ -128,7 +128,20 @@ def load_model_and_tokenizer(run_dir: str):
         key=lambda x: int(x.name.split("-")[1])
     )
     ckpt = ckpts[-1].path
-    epoch_approx = ckpts[-1].name.split("-")[1]
+    step_num = int(ckpts[-1].name.split("-")[1])
+
+    # Read actual epoch from trainer_state.json if present
+    state_path = os.path.join(ckpt, "trainer_state.json")
+    if os.path.exists(state_path):
+        with open(state_path) as f:
+            state = json.load(f)
+        epoch_val = state.get("epoch", None)
+        if epoch_val is not None:
+            epoch_approx = f"{epoch_val:.1f}"
+        else:
+            epoch_approx = f"step {step_num}"
+    else:
+        epoch_approx = f"step {step_num}"
 
     print(f"Base model : {base}")
     print(f"Checkpoint : {ckpt}")
@@ -246,7 +259,7 @@ def render_html(results: list, ckpt_path: str, epoch_label: str, run_dir: str) -
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>StepForge SFT Inference Report — {epoch_label} epochs</title>
+  <title>StepForge SFT Inference Report — epoch {epoch_label}</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             max-width: 1100px; margin: 0 auto; padding: 32px 24px; color: #111827; }}
@@ -259,7 +272,7 @@ def render_html(results: list, ckpt_path: str, epoch_label: str, run_dir: str) -
   <h1>StepForge SFT — Inference Progress Report</h1>
   <p style="color:#6B7280;margin-top:4px">
     Generated: {timestamp} &nbsp;|&nbsp; Run: <code>{run_name}</code> &nbsp;|&nbsp;
-    Checkpoint: <code>{os.path.basename(ckpt_path)}</code> (~{epoch_label} epochs)
+    Checkpoint: <code>{os.path.basename(ckpt_path)}</code> (epoch {epoch_label} / 10)
   </p>
 
   <h2>Model Configuration</h2>
@@ -267,7 +280,7 @@ def render_html(results: list, ckpt_path: str, epoch_label: str, run_dir: str) -
     {"".join(f'<tr><td style="padding:4px 16px 4px 0;color:#6B7280;font-weight:600">{k}</td><td style="padding:4px 0">{v}</td></tr>' for k, v in [
         ("Base model",        "meta-llama/Llama-3.2-3B-Instruct"),
         ("LoRA rank",         "r=16, alpha=32, all projection layers"),
-        ("Training epochs",   f"~{epoch_label} / 10 complete"),
+        ("Training epochs",   f"epoch {epoch_label} / 10 complete"),
         ("Sequence length",   "14,336 tokens"),
         ("Optimizer",         "adamw_8bit"),
         ("Effective batch",   "16 (1 × 4 grad_accum × 4 GPUs)"),
