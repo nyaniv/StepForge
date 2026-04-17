@@ -45,7 +45,7 @@ import torch
 # which breaks on optimizer state dicts. Override to maintain backward compatibility.
 _torch_load_orig = torch.load
 def _torch_load_compat(*args, **kwargs):
-    kwargs["weights_only"] = False  # force: transformers may pass weights_only=True explicitly
+    kwargs["weights_only"] = False  # force override — newer transformers passes weights_only=True explicitly
     return _torch_load_orig(*args, **kwargs)
 torch.load = _torch_load_compat
 
