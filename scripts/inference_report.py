@@ -102,7 +102,8 @@ def parse_step_topology(text: str) -> dict:
 
     has_header  = "ISO-10303-21;" in text
     has_data    = "DATA;" in text
-    has_endsec  = text.count("ENDSEC;") >= 2
+    endsec_count = text.count("ENDSEC;")
+    has_endsec  = endsec_count >= 1
     has_end     = "END-ISO-10303-21;" in text
     schema      = re.search(r"FILE_SCHEMA\s*\(\s*\('([^']+)'\)", text)
 
@@ -131,6 +132,7 @@ def parse_step_topology(text: str) -> dict:
         "has_header":        has_header,
         "has_data":          has_data,
         "has_endsec":        has_endsec,
+        "endsec_count":      endsec_count,
         "has_end":           has_end,
         "schema":            schema.group(1) if schema else "unknown",
         "truncated":         not has_end,
@@ -219,7 +221,7 @@ def render_html(results: list, ckpt_path: str, epoch_label: str, run_dir: str) -
         badges = " ".join([
             topo_badge(topo["has_header"],  "ISO-10303-21 ✓" if topo["has_header"]  else "No header"),
             topo_badge(topo["has_data"],    "DATA ✓"         if topo["has_data"]    else "No DATA"),
-            topo_badge(topo["has_endsec"],  "ENDSEC ✓"       if topo["has_endsec"]  else "No ENDSEC"),
+            topo_badge(topo["has_endsec"],  f"ENDSEC ×{topo['endsec_count']}" if topo["has_endsec"] else "No ENDSEC"),
             topo_badge(not topo["truncated"], "Complete"     if not topo["truncated"] else "Truncated"),
         ])
 
