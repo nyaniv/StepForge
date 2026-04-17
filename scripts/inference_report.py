@@ -89,9 +89,16 @@ def parse_step_topology(text: str) -> dict:
     if closed_shell:
         face_count = closed_shell.group(1).count("#")
 
-    branch = re.search(r"/\*\s*\[BRANCH\]\s*depth=(\d+)\s*children=(\d+)", text)
-    branch_depth    = int(branch.group(1)) if branch else None
-    branch_children = int(branch.group(2)) if branch else None
+    # Find all [BRANCH] annotations and take the one with the most children
+    # (the first annotation is always the shallow root with children=2; the
+    #  deeper annotation carries the meaningful complexity count)
+    branches = re.findall(r"/\*\s*\[BRANCH\]\s*depth=(\d+)\s*children=(\d+)", text)
+    if branches:
+        branches = [(int(d), int(c)) for d, c in branches]
+        main_branch = max(branches, key=lambda x: x[1])
+        branch_depth, branch_children = main_branch
+    else:
+        branch_depth, branch_children = None, None
 
     has_header  = "ISO-10303-21;" in text
     has_data    = "DATA;" in text
@@ -99,10 +106,25 @@ def parse_step_topology(text: str) -> dict:
     has_end     = "END-ISO-10303-21;" in text
     schema      = re.search(r"FILE_SCHEMA\s*\(\s*\('([^']+)'\)", text)
 
+    # Separate geometry entities from boilerplate header entities
+    HEADER_TYPES = {
+        "APPLICATION_PROTOCOL_DEFINITION", "APPLICATION_CONTEXT",
+        "SHAPE_DEFINITION_REPRESENTATION", "PRODUCT_DEFINITION_SHAPE",
+        "PRODUCT_DEFINITION", "PRODUCT_DEFINITION_CONTEXT",
+        "PRODUCT_DEFINITION_FORMATION", "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE",
+        "PRODUCT", "PRODUCT_RELATED_PRODUCT_CATEGORY",
+        "SHAPE_REPRESENTATION_RELATIONSHIP", "MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION",
+        "CARTESIAN_POINT", "DIRECTION", "VERTEX_POINT",
+        "AXIS2_PLACEMENT_3D", "PLANE",
+    }
+    geometry_types = {k: v for k, v in entity_types.items() if k not in HEADER_TYPES}
+    top_geometry = sorted(geometry_types.items(), key=lambda x: -x[1])[:8]
+    top_all = sorted(entity_types.items(), key=lambda x: -x[1])[:8]
+
     return {
         "total_entities":    len(entity_lines),
         "unique_types":      len(entity_types),
-        "top_entities":      sorted(entity_types.items(), key=lambda x: -x[1])[:8],
+        "top_entities":      top_geometry if top_geometry else top_all,
         "face_count":        face_count,
         "branch_depth":      branch_depth,
         "branch_children":   branch_children,
