@@ -336,9 +336,9 @@ def render_html(results: list, ckpt_path: str, epoch_label: str, run_dir: str) -
     <li>All outputs produce valid <code>ISO-10303-21</code> / <code>CONFIG_CONTROL_DESIGN</code> STEP headers</li>
     <li>Entity vocabulary matches training data: <code>ADVANCED_BREP_SHAPE_REPRESENTATION</code>, <code>MANIFOLD_SOLID_BREP</code>, <code>CLOSED_SHELL</code>, <code>ADVANCED_FACE</code></li>
     <li>Topology adapts to caption: plate caption (T2) generates 6 faces vs cylinder's 3 faces, and washer (T4) generates 4 faces — model is not purely copying the retrieved file</li>
-    <li>T3 (bolt + cylinder retrieved) produces a cylinder topology — the model does not yet adapt when the retrieved file is a poor match for a geometrically distinct shape; expected to improve with RL fine-tuning</li>
+    <li>T3 (bolt + cylinder retrieved) generates 4 faces — more complex than the retrieved cylinder (3 faces), indicating partial adaptation toward a more complex shape, though full hexagonal-head topology requires RL fine-tuning</li>
     <li>All outputs complete: <code>END-ISO-10303-21;</code> present in all 5 cases; generation budget is full remaining context after prompt (up to 14,336 tokens total)</li>
-    <li>Training continues to epoch 10; RL (GRPO) phase follows to optimize geometric reward</li>
+    <li>SFT training complete (10/10 epochs); next phase is RL (GRPO) with geometric point-cloud reward to improve topological accuracy under retrieval mismatch</li>
   </ul>
 </body>
 </html>"""
