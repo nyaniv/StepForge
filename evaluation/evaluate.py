@@ -179,6 +179,13 @@ def main():
             retrieved=record["relavant_step_file"],
             max_seq_length=cfg.model.max_seq_length,
         )
+        # The model generates DATA-section content without the "DATA;" prefix
+        # (the retrieved file already contains "DATA;" so the model skips it).
+        # step_to_pointcloud requires the output to start with "DATA;" to trigger
+        # its header injection. Prepend it if missing.
+        stripped = output.lstrip()
+        if not stripped.startswith("DATA;") and not stripped.startswith("ISO-10303-21;"):
+            output = "DATA;\n" + stripped
         generated.append(output)
         gt_steps.append(record.get("output", ""))
 
