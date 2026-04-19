@@ -22,10 +22,10 @@
 #SBATCH --error=%x_%j.err
 #SBATCH --time=08:00:00
 #SBATCH --nodes=1
-#SBATCH --ntasks=8                  # 1 task per GPU (torchrun model)
-#SBATCH --ntasks-per-node=8
-#SBATCH --cpus-per-task=14          # 112 CPUs / 8 GPUs = 14 CPUs per task
-#SBATCH --gres=gpu:8                # full node: 8× H100 80GB
+#SBATCH --ntasks=4                  # 1 task per GPU (torchrun model)
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=14          # 14 CPUs per GPU (cluster requirement)
+#SBATCH --gres=gpu:4                # 4× H100 80GB (matches paper)
 #SBATCH --partition=ai
 #SBATCH --account=lilly-agentic-gpu
 #SBATCH --requeue                   # allow requeue on preemption or time limit
@@ -133,7 +133,7 @@ python training/preflight_check.py || { echo "PREFLIGHT FAILED — aborting job"
 
 torchrun \
     --standalone \
-    --nproc_per_node=8 \
+    --nproc_per_node=4 \
     training/rl_train.py \
         --config configs/config_gautschi.yaml \
         $SFT_CKPT_ARG &
