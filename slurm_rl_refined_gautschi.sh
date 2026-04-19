@@ -21,11 +21,11 @@
 #SBATCH --ntasks=8
 #SBATCH --ntasks-per-node=8
 #SBATCH --cpus-per-task=14
-#SBATCH --mem=800G
 #SBATCH --gres=gpu:8
 #SBATCH --partition=ai
 #SBATCH --account=lilly-agentic-gpu
 #SBATCH --requeue
+#SBATCH --qos=normal
 #SBATCH --signal=B:SIGUSR1@120
 
 if [ -f /etc/profile.d/modules.sh ]; then

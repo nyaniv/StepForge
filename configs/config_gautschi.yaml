@@ -73,7 +73,7 @@ rl:
   max_steps: 80                    # paper Section 4.4: "total of 80 optimization steps"
   # max_completion_length is NOT stated in the paper.  8192 is our engineering choice
   # for H100 with FlashAttention-2; increases trainable examples vs the 4096 used on A100.
-  max_completion_length: 8192
+  max_completion_length: 4096
   reward:
     delta_low: 0.01                # paper Section 4.4: "lower bound to 0.01"
     delta_high: 0.5                # paper Section 4.4: "upper bound to 0.5"

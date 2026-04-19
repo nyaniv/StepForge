@@ -417,6 +417,8 @@ def main():
         max_steps=cfg.rl.max_steps,
         max_completion_length=max_completion_length,  # from config; matches build_rl_dataset filter
         bf16=True,
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         logging_steps=1,
         save_steps=20,
         report_to="none",
