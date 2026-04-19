@@ -20,17 +20,16 @@
 #SBATCH --job-name=stepforge_rl
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
-#SBATCH --time=24:00:00
+#SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=8                  # 1 task per GPU (torchrun model)
 #SBATCH --ntasks-per-node=8
 #SBATCH --cpus-per-task=14          # 112 CPUs / 8 GPUs = 14 CPUs per task
-#SBATCH --mem=800G                  # ~100 GB per GPU process; well within 1 TB
 #SBATCH --gres=gpu:8                # full node: 8× H100 80GB
 #SBATCH --partition=ai
 #SBATCH --account=lilly-agentic-gpu
 #SBATCH --requeue                   # allow requeue on preemption or time limit
-#SBATCH --qos=preemptible
+#SBATCH --qos=normal
 #SBATCH --signal=B:SIGUSR1@120      # warn 120 s before wall-time so we can resubmit
 # #SBATCH --account=YOUR_ACCOUNT   # uncomment and set if your allocation requires it
 
