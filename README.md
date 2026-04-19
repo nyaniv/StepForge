@@ -193,3 +193,7 @@ StepForge/
   [[Paper]](https://arxiv.org/abs/2409.17106) ·
   [[Code]](https://github.com/SadilKhan/Text2CAD) ·
   [[Project page]](https://sadilkhan.github.io/text2cad-project/)
+
+- **Unsloth**: The original single-GPU SFT script (`training/llama3_SFT_response.py`)
+  was structured around the Unsloth fine-tuning template (Apache 2.0).
+  [[Repository]](https://github.com/unslothai/unsloth)

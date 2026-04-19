@@ -24,6 +24,20 @@ their codebase.
 
 ---
 
+## From Unsloth (Apache 2.0)
+
+**Repository**: [unslothai/unsloth](https://github.com/unslothai/unsloth)
+**License**: Apache 2.0
+
+`training/llama3_SFT_response.py` — the original single-GPU SFT script — was
+structured around the Unsloth SFT fine-tuning template. The training loop
+structure, LoRA configuration pattern, and chat-template formatting approach
+are derived from their template. This script is archived; the current multi-GPU
+training (`training/sft_multigpu.py`) was rewritten from scratch using standard
+HuggingFace Trainer + PEFT without Unsloth.
+
+---
+
 ## From STEP-LLM paper (Chen et al., 2026)
 
 **Paper**: arXiv:2601.12641
