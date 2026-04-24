@@ -259,10 +259,16 @@ def main():
 
     # ── Apply config-driven globals ──────────────────────────────────────────
     global MAX_RETRIEVED_TOKENS
-    # Paper does not truncate retrieved context. Fall back to max_seq_length so
-    # the only hard limit is the model's context window.
+    # During RL the prompt (retrieved file + caption + chat template) must leave
+    # room for max_completion_length generated tokens within the context window.
+    # retrieved_budget = max_seq_length - max_completion_length - ~300 overhead
+    max_seq = int(getattr(cfg.model, "max_seq_length", 14336))
+    max_comp = int(getattr(cfg.rl, "max_completion_length", 4096))
+    overhead = 300  # chat template tokens + caption
     MAX_RETRIEVED_TOKENS = int(getattr(cfg.model, "max_retrieved_tokens",
-                                       getattr(cfg.model, "max_seq_length", 16384)))
+                                       max_seq - max_comp - overhead))
+    logger.info(f"MAX_RETRIEVED_TOKENS={MAX_RETRIEVED_TOKENS} "
+                f"(max_seq={max_seq}, max_comp={max_comp}, overhead={overhead})")
 
     # ── CLI overrides (smoke test / debugging) ───────────────────────────────
     if args.max_steps is not None:
