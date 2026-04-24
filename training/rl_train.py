@@ -126,6 +126,11 @@ def make_reward_fn(text2cad_src: str, delta_low: float, delta_high: float,
             if not s.startswith("DATA;") and not s.startswith("ISO-10303-21;"):
                 s = "DATA;\n" + s
             return s
+        import os as _os
+        if _os.environ.get("LOCAL_RANK", "0") == "0":
+            sample = completions[0] if completions else ""
+            fixed = _fix(sample)
+            logger.info(f"[reward_fn] completion[0] first 200 chars: {repr(fixed[:200])}")
         with ThreadPoolExecutor(max_workers=len(completions)) as pool:
             futures = [
                 pool.submit(
