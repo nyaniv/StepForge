@@ -73,7 +73,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from trl import GRPOConfig, GRPOTrainer
 
 from retrieval.retriever import Retriever
-from reward.scd_reward import compute_reward, compute_parse_reward
+from reward.scd_reward import compute_reward, compute_parse_reward, RewardConfig
 
 
 # ── Prompt format (must match SFT chat template format) ───────────────────────
@@ -125,6 +125,7 @@ def format_reward_fn(completions: list[str], **kwargs) -> list[float]:
 def make_reward_fn(text2cad_src: str, delta_low: float, delta_high: float,
                    n_points: int):
     """Return a GRPO-compatible reward function with closed-over config."""
+    rcfg = RewardConfig(n_points=n_points, delta_low=delta_low, delta_high=delta_high)
 
     def reward_fn(completions: list[str], ground_truth_step: list[str],
                   **kwargs) -> list[float]:
@@ -137,14 +138,13 @@ def make_reward_fn(text2cad_src: str, delta_low: float, delta_high: float,
             futures = [
                 pool.submit(
                     compute_reward, _fix(gen), gt,
-                    n_points=n_points,
-                    delta_low=delta_low,
-                    delta_high=delta_high,
+                    rcfg=rcfg,
                     text2cad_src=text2cad_src,
                 )
                 for gen, gt in zip(completions, ground_truth_step)
             ]
-            return [f.result() for f in futures]
+            # compute_reward returns (reward, raw_scd, stage, n_triangles)
+            return [f.result()[0] for f in futures]
 
     return reward_fn
 
