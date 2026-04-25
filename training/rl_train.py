@@ -56,6 +56,13 @@ if "HF_HOME" not in os.environ:
 
 import time
 import torch
+import numpy as np
+# Allow numpy globals when loading pickled FAISS metadata (PyTorch >= 2.4 blocks them by default)
+torch.serialization.add_safe_globals([
+    np.ndarray,
+    np.core.multiarray._reconstruct,
+    np.dtype,
+])
 from datasets import Dataset
 from loguru import logger
 from omegaconf import OmegaConf
@@ -114,10 +121,15 @@ def make_reward_fn(text2cad_src: str, delta_low: float, delta_high: float,
 
     def reward_fn(completions: list[str], ground_truth_step: list[str],
                   **kwargs) -> list[float]:
+        def _fix(s: str) -> str:
+            s = s.lstrip()
+            if not s.startswith("DATA;") and not s.startswith("ISO-10303-21;"):
+                s = "DATA;\n" + s
+            return s
         with ThreadPoolExecutor(max_workers=len(completions)) as pool:
             futures = [
                 pool.submit(
-                    compute_reward, gen, gt,
+                    compute_reward, _fix(gen), gt,
                     n_points=n_points,
                     delta_low=delta_low,
                     delta_high=delta_high,
@@ -136,9 +148,14 @@ def make_parse_reward_fn(text2cad_src: str):
     """Return a GRPO-compatible parse reward function."""
 
     def parse_reward_fn(completions: list[str], **kwargs) -> list[float]:
+        def _fix(s: str) -> str:
+            s = s.lstrip()
+            if not s.startswith("DATA;") and not s.startswith("ISO-10303-21;"):
+                s = "DATA;\n" + s
+            return s
         with ThreadPoolExecutor(max_workers=len(completions)) as pool:
             futures = [
-                pool.submit(compute_parse_reward, gen, text2cad_src=text2cad_src)
+                pool.submit(compute_parse_reward, _fix(gen), text2cad_src=text2cad_src)
                 for gen in completions
             ]
             return [f.result() for f in futures]
