@@ -56,6 +56,13 @@ if "HF_HOME" not in os.environ:
 
 import time
 import torch
+import numpy as np
+# Allow numpy globals when loading pickled FAISS metadata (PyTorch >= 2.4 blocks them by default)
+torch.serialization.add_safe_globals([
+    np.ndarray,
+    np.core.multiarray._reconstruct,
+    np.dtype,
+])
 from datasets import Dataset
 from loguru import logger
 from omegaconf import OmegaConf
