@@ -192,7 +192,7 @@ def formatting_prompts_func(examples):
     header tokens are present in the tokenized sequence.
     """
     instructions = examples["caption"]
-    outputs = examples["step"]
+    outputs = examples["output"]
 
     all_input_ids = []
     all_attention_masks = []
@@ -251,7 +251,7 @@ def formatting_prompts_func(examples):
         return input_ids, attention_mask, labels, text
 
     if USE_RAG:
-        inputs = examples.get("retrieved_step", [""] * len(instructions))
+        inputs = examples["relavant_step_file"]
         for instruction, input_, output in zip(instructions, inputs, outputs):
             iids, amask, lbls, txt = _process_one(instruction, output, input_)
             all_input_ids.append(iids)

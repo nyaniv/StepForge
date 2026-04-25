@@ -12,6 +12,16 @@ Handles OCC-generated STEP files which have:
 
 import re
 
+# C9: STEP string literals can contain '#42' (e.g. PRODUCT('Bracket #42 rev B',...)).
+# Mask them before extracting #N references so part-number text isn't mistaken
+# for a graph edge. STEP escapes single quotes by doubling ('').
+_STR_LIT_RE = re.compile(r"'(?:[^']|'')*'")
+
+
+def _mask_string_literals(text: str) -> str:
+    """Replace string literal contents with underscores, preserving span lengths."""
+    return _STR_LIT_RE.sub(lambda m: "_" * len(m.group()), text)
+
 
 def _parse_lines(lines):
     """
@@ -36,8 +46,10 @@ def _parse_lines(lines):
             if line == "DATA;":
                 in_data = True
                 continue
-            # ENDSEC; ends the HEADER section — skip it, keep collecting header
-            if line in ("ENDSEC;", "END-ISO-10303-21;"):
+            # C8: keep ENDSEC; in the header so dfs_reserializer.py can emit
+            # a structurally valid HEADER;...ENDSEC; DATA;...ENDSEC; file.
+            # Only END-ISO-10303-21; is dropped (it goes at the very end).
+            if line == "END-ISO-10303-21;":
                 continue
             header_lines.append(line)
             continue
@@ -53,22 +65,43 @@ def _parse_lines(lines):
         else:
             pending = line
 
-        # A complete entity ends with ';'
-        if not pending.endswith(";"):
+        # A complete entity ends with ';'. ISO 10303-21 forbids newlines in
+        # string literals so this is correct on conformant files; mask anyway
+        # so a malformed multi-line literal can't cause a mid-entity false split.
+        if not _mask_string_literals(pending).endswith(";"):
             continue
 
         entity_line = pending
         pending = ""
 
-        m = re.match(r"#(\d+)\s*=\s*(\w+)\s*\((.+)\)\s*;$", entity_line, re.DOTALL)
-        if not m:
-            continue
+        m = re.match(r"#(\d+)\s*=\s*(\w+)\s*\((.*)\)\s*;$", entity_line, re.DOTALL)
+        if m:
+            eid   = int(m.group(1))
+            etype = m.group(2)
+            eargs = m.group(3)
+        else:
+            # C6: complex entities (#3 = ( GEOMETRIC_REPRESENTATION_CONTEXT(3) ... );)
+            # have no identifier before '(' so the simple regex above can't match.
+            # OCC always emits these for units/context — silently dropping them
+            # produces dangling refs in the training label.
+            mc = re.match(r"#(\d+)\s*=\s*\((.*)\)\s*;$", entity_line, re.DOTALL)
+            if mc:
+                eid   = int(mc.group(1))
+                etype = ""  # complex entity: no single type name
+                eargs = mc.group(2)
+            elif entity_line.startswith("#"):
+                # C10: hard-fail instead of silent continue. filter_dataset.py
+                # wraps this in try/except, so a raise here correctly excludes
+                # the file from training rather than passing through corrupt.
+                raise ValueError(
+                    f"step_parser: unparseable entity line: {entity_line[:120]!r}"
+                )
+            else:
+                continue  # blank/comment lines inside DATA — harmless
 
-        eid   = int(m.group(1))
-        etype = m.group(2)
-        eargs = m.group(3)
-
-        refs = [int(r) for r in re.findall(r"#(\d+)", eargs)]
+        # C9: extract refs from a string-literal-masked copy.
+        masked_args = _mask_string_literals(eargs)
+        refs = [int(r) for r in re.findall(r"#(\d+)", masked_args)]
         entities[eid] = {"type": etype, "args": eargs, "refs": refs}
         for r in refs:
             referenced_by.setdefault(r, set()).add(eid)

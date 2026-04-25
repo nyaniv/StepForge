@@ -1,6 +1,18 @@
 """
 Orchestrator: run the full dataset construction pipeline.
 
+⚠️  WARNING (W13): This is the LEGACY pipeline. Its output (train.jsonl from
+    filter_dataset.py via step_parser.py + dfs_reserializer.py) differs from
+    what the training scripts consume.
+
+    The ACTIVE pipeline that llama3_SFT_response.py and rl_train.py expect is:
+      batch_restructure.py → step_restructurer.py → round_step_numbers.py
+        → dataset_construct_rag.py → data_split.py
+    which produces train.json (JSON array, not JSONL).
+
+    Use this script for exploratory work only. Running both pipelines will
+    overwrite each other's output in cfg.paths.processed_dir.
+
 Steps (in order):
   1. Export STEP files from .pth CAD vectors (export_steps.py)
   2. Pair STEP files with abstract captions (pair_captions.py)
@@ -41,6 +53,12 @@ def main():
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
+
+    logger.warning(
+        "build_dataset.py is the LEGACY pipeline (filter_dataset.py → train.jsonl). "
+        "The active training scripts read train.json from data_split.py. "
+        "See module docstring."
+    )
 
     # ── Phase 1: Export STEP from .pth vectors ─────────────────────────────
     if not args.skip_export:

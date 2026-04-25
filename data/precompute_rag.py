@@ -32,16 +32,23 @@ def precompute_rag(train_jsonl: str, retriever: Retriever, output_jsonl: str):
     Enrich every training record with its pre-retrieved STEP.
     Uses exclude_uid to prevent self-retrieval.
     """
+    # M3: active pipeline writes train.json (JSON array) with id_original/output
+    # keys; inactive filter_dataset.py writes train.jsonl with uid/step keys.
     with open(train_jsonl) as f:
-        records = [json.loads(l) for l in f]
+        head = f.read(1); f.seek(0)
+        if head == "[":
+            records = json.load(f)
+        else:
+            records = [json.loads(l) for l in f if l.strip()]
     logger.info(f"Pre-computing RAG for {len(records)} training examples...")
 
     for record in tqdm(records, desc="Pre-computing RAG"):
+        uid = record.get("uid") or record.get("id_original") or ""
         retrieved = retriever.retrieve(
             record["caption"],
-            exclude_uid=record["uid"],
+            exclude_uid=uid,
         )
-        record["retrieved_step"]    = retrieved["step"]
+        record["retrieved_step"]    = retrieved.get("step") or retrieved.get("output") or ""
         record["retrieved_caption"] = retrieved["caption"]
 
     Path(output_jsonl).parent.mkdir(parents=True, exist_ok=True)
@@ -65,7 +72,10 @@ def main():
         model_name=cfg.retrieval.model,
     )
 
-    train_jsonl = os.path.join(cfg.paths.processed_dir, "train.jsonl")
+    # M3: prefer active-pipeline output; fall back to JSONL.
+    train_jsonl = os.path.join(cfg.paths.processed_dir, "train.json")
+    if not os.path.exists(train_jsonl):
+        train_jsonl = os.path.join(cfg.paths.processed_dir, "train.jsonl")
     output_jsonl = os.path.join(cfg.paths.processed_dir, "train_with_rag.jsonl")
 
     precompute_rag(train_jsonl, retriever, output_jsonl)

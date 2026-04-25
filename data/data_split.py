@@ -69,18 +69,19 @@ def main():
         else:
             unmatched.append(rec)
 
-    # Fail hard instead of random fallback: a reshuffle would leave each record's
-    # relavant_step_file (retrieved from a train-only index) pointing at what is
-    # now test data, silently corrupting evaluation.
+    # B3: fail hard instead of random-fallback. A reshuffle would leave each
+    # record's relavant_step_file (retrieved from a train-only index built by
+    # dataset_construct_rag.py) pointing at what is now test data.
     if len(train) < 100:
         raise RuntimeError(
             f"Only {len(train)} records matched the train split (expected ~14k). "
-            f"UID format mismatch between rag_dataset.json and the split JSON? "
+            f"UID format mismatch between rag_dataset.json and {cfg.paths.split_json}? "
             f"unmatched={len(unmatched)}, val={len(val)}, test={len(test)}"
         )
 
     logger.info(f"Split result — train: {len(train)}, val: {len(val)}, test: {len(test)}, unmatched: {len(unmatched)}")
 
+    # D3: write unmatched records so the user can inspect what was dropped.
     if unmatched:
         unmatched_path = os.path.join(out_dir, "unmatched.json")
         with open(unmatched_path, "w") as f:

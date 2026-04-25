@@ -3,7 +3,7 @@
 # Scratch:  $SCRATCH  (200 TB quota, see myquota)
 #
 # Full paper hyperparameters — no compromises needed at this scale.
-# Paper (Chen et al., 2026) used 4×H100; we use 8×H100 with matching throughput.
+# Paper (Shi et al., 2026) used 4×H100; we use 8×H100 with matching throughput.
 #
 # FIRST-TIME SETUP:
 #   bash gautschi_setup.sh
@@ -74,11 +74,19 @@ rl:
   # max_completion_length is NOT stated in the paper.  8192 is our engineering choice
   # for H100 with FlashAttention-2; increases trainable examples vs the 4096 used on A100.
   max_completion_length: 4096
+  use_reward_shaping: false
+  save_steps: 10
+  kl_halt_threshold: 1.0
   reward:
     delta_low: 0.01                # paper Section 4.4: "lower bound to 0.01"
     delta_high: 0.5                # paper Section 4.4: "upper bound to 0.5"
-    # n_sample_points is NOT stated in the paper.  2048 is from the implementation plan.
-    n_sample_points: 2048
+    n_sample_points: 2000           # A4: official eval uses 2000 (step_chamfer_reward.py:40)
+    # A1: true = paper Eq.(1) bidirectional; false = official eval code (chamferdist forward-only)
+    chamfer_bidirectional: true
+    # A2: W16 scale prenorm; set false for paper-exact 3-stage alignment
+    scale_prenorm: true
+    # A3: null=adaptive (C11 OOM-safe); 0.1=official eval
+    mesh_deflection: null
 
 retrieval:
   model: "all-MiniLM-L6-v2"  # paper Section 3.2: "SentenceTransformer to embed captions"
