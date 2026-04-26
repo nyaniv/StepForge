@@ -160,12 +160,19 @@ def make_parse_reward_fn(text2cad_src: str):
             if not s.startswith("DATA;") and not s.startswith("ISO-10303-21;"):
                 s = "DATA;\n" + s
             return s
+        if os.environ.get("LOCAL_RANK", "0") == "0" and completions:
+            sample = _fix(completions[0])
+            logger.info(f"[parse_reward] completion[0] first 300 chars: {repr(sample[:300])}")
+            logger.info(f"[parse_reward] has END-ISO: {'END-ISO-10303-21;' in sample}, len={len(sample)}")
         with ThreadPoolExecutor(max_workers=len(completions)) as pool:
             futures = [
                 pool.submit(compute_parse_reward, _fix(gen), text2cad_src=text2cad_src)
                 for gen in completions
             ]
-            return [f.result() for f in futures]
+            results = [f.result() for f in futures]
+        if os.environ.get("LOCAL_RANK", "0") == "0":
+            logger.info(f"[parse_reward] results: {results}")
+        return results
 
     return parse_reward_fn
 
