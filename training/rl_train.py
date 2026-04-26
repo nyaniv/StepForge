@@ -143,8 +143,15 @@ def make_reward_fn(text2cad_src: str, delta_low: float, delta_high: float,
                 )
                 for gen, gt in zip(completions, ground_truth_step)
             ]
-            # compute_reward returns (reward, raw_scd, stage, n_triangles)
-            return [f.result()[0] for f in futures]
+            # compute_reward returns (reward, raw_scd, stage, n_triangles).
+            # NaN rewards (GT-side parse failures) must be sanitized to 0.0 —
+            # propagating NaN to GRPO loss → NaN gradients → NaN weights → next
+            # step's generation crashes with "probability tensor contains nan".
+            rewards = []
+            for f in futures:
+                r = f.result()[0]
+                rewards.append(0.0 if not np.isfinite(r) else float(r))
+            return rewards
 
     return reward_fn
 
