@@ -137,34 +137,21 @@ def _parse_worker(queue: mp.Queue, generated_step: str,
 def compute_parse_reward(generated_step: str, text2cad_src: str | None = None,
                          reward_value: float = 0.3) -> float:
     """
-    Returns reward_value if the generated STEP parses successfully in OCP,
-    0.0 otherwise.  Runs in a subprocess to isolate segfaults.
+    Returns reward_value if the generated STEP parses + tessellates successfully,
+    0.0 otherwise. Runs in-process — subprocess fork deadlocks after CUDA init.
     """
     if "END-ISO-10303-21;" not in generated_step:
         return 0.0
-    queue: mp.Queue = mp.Queue()
-    proc = mp.Process(target=_parse_worker, args=(queue, generated_step, text2cad_src))
-    proc.start()
-    proc.join(timeout=30)
-    if proc.is_alive():
-        proc.terminate()
-        proc.join(5)
-        if proc.is_alive():
-            proc.kill()
-            proc.join()
-    if proc.exitcode != 0:
-        queue.close()
-        return 0.0
     try:
-        # Use timeout instead of get_nowait: the OS pipe feeder thread may not
-        # have flushed the result yet when proc.join() returns, causing a
-        # spurious Empty exception even though the subprocess put() succeeded.
-        result = queue.get(timeout=5)
-        return reward_value if result == 1 else 0.0
+        pc, n_tris = step_to_pointcloud(generated_step, n_points=64,
+                                        text2cad_src=text2cad_src,
+                                        return_triangle_count=True)
+        ok = (pc is not None
+              and n_tris >= _MIN_TRIANGLES
+              and len(np.unique(pc, axis=0)) >= _MIN_UNIQUE_POINTS)
+        return reward_value if ok else 0.0
     except Exception:
         return 0.0
-    finally:
-        queue.close()
 
 
 # ── Subprocess worker (isolates Open3D segfaults) ─────────────────────────────
@@ -297,128 +284,68 @@ def compute_reward(
       reward     -- r_geo(scd) ∈ [0,1], or 0.0 on pred failure, or NaN on GT failure
       raw_scd    -- pre-clamp Chamfer distance (NaN if not computed)
       fail_stage -- 'ok' | 'no_terminator' | 'pred_parse' | 'gt_parse'
-                    | 'pred_degenerate' | 'gt_degenerate' | 'scd_nonfinite'
-                    | 'exception' | 'timeout' | 'segfault' | 'segfault_gt'
-                    | 'spawn_fail'
+                    | 'pred_degenerate' | 'gt_degenerate' | 'scd_nonfinite' | 'exception'
       n_triangles-- mesh triangle count for the prediction (0 if parse failed)
 
-    Everything (STEP parsing, tessellation, alignment, Chamfer) runs in a
-    subprocess so any C++ segfault cannot kill the training process.
+    Runs in-process — subprocess fork deadlocks after CUDA/OpenMP init on Linux.
     """
-    # Fast-path: skip subprocess overhead if terminator is absent
     if "END-ISO-10303-21;" not in generated_step:
         return (0.0, float("nan"), "no_terminator", 0)
 
-    # GT point-cloud cache: all generations for a prompt share the same GT.
-    # spawn copies the parent's memory, so the precomputed array reaches the child.
-    cache_key = _gt_cache_key(gt_step, rcfg)
-    cached = _GT_PC_CACHE.get(cache_key)
-    if cached is None:
-        gt_pc_pre, gt_tris_pre = None, None
-    else:
-        gt_pc_pre, gt_tris_pre = cached
-
-    # B2: mp.Queue() and proc.start() can raise OSError on fd/process-slot
-    # exhaustion. With 16 ThreadPool workers × DDP ranks × 80 steps that's
-    # plausible mid-run; honour the "Never raises" docstring.
     try:
-        queue: mp.Queue = mp.Queue()
-        # API-2: kwargs= instead of a positional args tuple — immune to reorder.
-        proc = mp.Process(
-            target=_scd_worker,
-            kwargs=dict(
-                queue=queue, generated_step=generated_step, gt_step=gt_step,
-                rcfg=rcfg, text2cad_src=text2cad_src, verbose=verbose,
-                gt_pc_precomputed=gt_pc_pre, gt_tris_precomputed=gt_tris_pre,
-            ),
-        )
-        proc.start()
-    except OSError as e:
-        if verbose:
-            print(f"[compute_reward] subprocess spawn failed: {e!r}")
-        return (float("nan"), float("nan"), "spawn_fail", 0)
-    proc.join(timeout=60)  # 60 s hard cap per reward call
+        # Pred point cloud
+        pred_pc, pred_tris = step_to_pointcloud(
+            generated_step, n_points=rcfg.n_points,
+            text2cad_src=text2cad_src, verbose=verbose,
+            return_triangle_count=True, deflection=rcfg.deflection)
 
-    # Drain phase markers + result. Phase tells us where a segfault hit.
-    last_phase = "pred"
-    result = None
-    while True:
-        try:
-            item = queue.get_nowait()
-        except Exception:
-            break
-        if isinstance(item, tuple) and len(item) == 2 and item[0] == "_phase":
-            last_phase = item[1]
+        if pred_pc is None:
+            return (0.0, float("nan"), "pred_parse", 0)
+        if pred_tris < _MIN_TRIANGLES:
+            return (0.0, float("nan"), "pred_degenerate", pred_tris)
+        if len(np.unique(pred_pc, axis=0)) < _MIN_UNIQUE_POINTS:
+            return (0.0, float("nan"), "pred_degenerate", pred_tris)
+
+        # GT point cloud — use cache to avoid recomputing for all 8 GRPO generations
+        cache_key = _gt_cache_key(gt_step, rcfg)
+        cached = _GT_PC_CACHE.get(cache_key)
+        if cached is not None:
+            gt_pc, gt_tris = cached
         else:
-            result = item
+            gt_pc, gt_tris = step_to_pointcloud(
+                gt_step, n_points=rcfg.n_points,
+                text2cad_src=text2cad_src, verbose=verbose,
+                return_triangle_count=True, deflection=rcfg.deflection)
+            if gt_pc is not None and gt_tris >= _MIN_TRIANGLES:
+                with _GT_PC_CACHE_LOCK:
+                    if cache_key not in _GT_PC_CACHE:
+                        if len(_GT_PC_CACHE) >= _GT_PC_CACHE_MAX:
+                            evict = next(iter(_GT_PC_CACHE), None)
+                            if evict is not None:
+                                _GT_PC_CACHE.pop(evict, None)
+                        _GT_PC_CACHE[cache_key] = (gt_pc, gt_tris)
 
-    if proc.is_alive():
-        proc.terminate()
-        proc.join(5)
-        if proc.is_alive():
-            proc.kill()
-            proc.join()
-        queue.close()
-        # Best-effort sweep of temp files orphaned by the killed worker.
-        import glob as _glob, shutil as _shutil
-        for _d in _glob.glob(f"/tmp/stepforge_occ_{proc.pid}_*"):
-            _shutil.rmtree(_d, ignore_errors=True)
-        return (0.0, float("nan"), "timeout", 0)
+        if gt_pc is None:
+            return (float("nan"), float("nan"), "gt_parse", pred_tris)
+        if gt_tris < _MIN_TRIANGLES:
+            return (float("nan"), float("nan"), "gt_degenerate", pred_tris)
+        if len(np.unique(gt_pc, axis=0)) < _MIN_UNIQUE_POINTS:
+            return (float("nan"), float("nan"), "gt_degenerate", pred_tris)
 
-    if proc.exitcode != 0:
+        scd = scaled_chamfer_distance(pred_pc, gt_pc,
+                                      bidirectional=rcfg.bidirectional,
+                                      scale_prenorm=rcfg.scale_prenorm)
         if verbose:
-            print(f"[compute_reward] subprocess segfault in {last_phase} phase: exitcode={proc.exitcode}")
-        queue.close()
-        # F1: segfault is the COMMON failure for malformed STEP through OCC;
-        # the worker's finally never runs. Sweep its temp dirs here too.
-        import glob as _glob, shutil as _shutil
-        for _d in _glob.glob(f"/tmp/stepforge_occ_{proc.pid}_*"):
-            _shutil.rmtree(_d, ignore_errors=True)
-        # GT-side segfault → NaN (masked to batch mean), not 0.0 (spurious negative gradient).
-        if last_phase == "gt":
-            return (float("nan"), float("nan"), "segfault_gt", 0)
-        return (0.0, float("nan"), "segfault", 0)
+            print(f"[compute_reward] SCD={scd:.4f}")
+        if not np.isfinite(scd):
+            return (float("nan"), float("nan"), "scd_nonfinite", pred_tris)
 
-    # Upstream Bug 3 / RA-2: the OS pipe feeder thread can lag behind
-    # proc.join(), so the get_nowait() drain above may have missed items.
-    # The worker puts up to three items (two phase markers + result), so a
-    # single blocking read is insufficient. Drain with a deadline.
-    if result is None:
-        deadline = time.monotonic() + 5
-        while result is None and time.monotonic() < deadline:
-            try:
-                item = queue.get(timeout=max(0.01, deadline - time.monotonic()))
-            except Exception:
-                break
-            if isinstance(item, tuple) and len(item) == 2 and item[0] == "_phase":
-                last_phase = item[1]
-            else:
-                result = item
-
-    queue.close()
-    if result is None:
+        reward = r_geo(scd, delta_low=rcfg.delta_low, delta_high=rcfg.delta_high)
         if verbose:
-            print("[compute_reward] subprocess exited cleanly but queue had no result")
+            print(f"[compute_reward] reward={reward:.4f}")
+        return (reward, float(scd), "ok", pred_tris)
+
+    except Exception as e:
+        if verbose:
+            print(f"[compute_reward] Exception: {e!r}")
         return (0.0, float("nan"), "exception", 0)
-
-    # Populate GT cache on first successful parse (only when not already cached
-    # and the worker actually computed it — i.e. result wasn't an early-out).
-    if cached is None and result[2] in ("ok", "scd_nonfinite", "pred_degenerate"):
-        with _GT_PC_CACHE_LOCK:
-            # B1: re-check under lock — another GRPO rollout for the same prompt
-            # may have populated this key between our unlocked read and now.
-            if cache_key not in _GT_PC_CACHE:
-                if len(_GT_PC_CACHE) >= _GT_PC_CACHE_MAX:
-                    evict = next(iter(_GT_PC_CACHE), None)
-                    if evict is not None:
-                        _GT_PC_CACHE.pop(evict, None)
-                # We can't recover the GT pc from the result tuple — recompute once in
-                # the parent (no segfault risk: this exact GT just succeeded in the child).
-                gt_pc, gt_tris = step_to_pointcloud(gt_step, n_points=rcfg.n_points,
-                                                    text2cad_src=text2cad_src,
-                                                    return_triangle_count=True,
-                                                    deflection=rcfg.deflection)
-                if gt_pc is not None:
-                    _GT_PC_CACHE[cache_key] = (gt_pc, gt_tris)
-
-    return result

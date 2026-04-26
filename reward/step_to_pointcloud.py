@@ -227,8 +227,9 @@ def step_to_pointcloud(step_content: str, n_points: int = 2000, *,
 
         if verbose:
             unique_pts = len(np.unique(pts, axis=0))
+            defl_str = f"{deflection:.3g}" if deflection is not None else "adaptive"
             print(f"[step_to_pointcloud] OK: faces={n_faces}, tris={len(tris)}, "
-                  f"sampled={len(pts)}, unique={unique_pts}, deflection={deflection:.3g}")
+                  f"sampled={len(pts)}, unique={unique_pts}, deflection={defl_str}")
         return _ret(pts, len(tris))
 
     except ImportError:
