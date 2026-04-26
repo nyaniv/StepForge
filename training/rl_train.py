@@ -399,6 +399,18 @@ def main():
     optional_kwargs = {}
     if "entropy_coef" in grpo_params:
         optional_kwargs["entropy_coef"] = cfg.rl.entropy_coef
+    # TRL 0.14 GRPOConfig defaults max_prompt_length=512 and LEFT-truncates the
+    # prompt to that length before generation. Our RL prompt is the chat template
+    # + caption + retrieved STEP file (~10k tokens), so the default would slice
+    # out everything except a tail-fragment of the retrieved STEP — the model
+    # then never sees the system instruction and falls back to base-Llama
+    # conversational behaviour ("It seems like you've pasted a lot of text…"),
+    # producing 0 format/parse/geometry reward indefinitely. Size the prompt
+    # budget to the full context minus the completion budget.
+    _max_seq = int(getattr(cfg.model, "max_seq_length", 16384))
+    prompt_length_budget = _max_seq - max_completion_length
+    if "max_prompt_length" in grpo_params:
+        optional_kwargs["max_prompt_length"] = prompt_length_budget
 
     grpo_config = GRPOConfig(
         output_dir=cfg.paths.rl_checkpoint_dir,
@@ -420,6 +432,11 @@ def main():
         # strip ground_truth_step before it ever reaches the geometry reward fn,
         # making the entire reward signal zero while training appears to proceed.
         remove_unused_columns=False,
+    )
+    logger.info(
+        f"GRPOConfig: max_prompt_length={optional_kwargs.get('max_prompt_length')} "
+        f"max_completion_length={max_completion_length} "
+        f"(prompt_budget={prompt_length_budget}, max_seq={_max_seq})"
     )
 
     model.config.use_cache = False
