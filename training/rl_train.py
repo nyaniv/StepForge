@@ -470,7 +470,7 @@ def main():
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         logging_steps=1,
-        save_steps=20,
+        save_steps=cfg.rl.save_steps,
         report_to="none",
         seed=42,
         # remove_unused_columns=False is CRITICAL: GRPOTrainer passes reward

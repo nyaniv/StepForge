@@ -16,16 +16,18 @@ Eq. 3 — Piecewise linear reward:
     R_geo(scd) = (δ_high - scd) / (δ_high - δ_low)  otherwise
 """
 
+import atexit
 import multiprocessing as mp
 import threading
 import time
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 
 import numpy as np
 from scipy.spatial import cKDTree
 
 from reward.alignment import align_point_clouds
-from reward.step_to_pointcloud import step_to_pointcloud
 
 
 # API-3: collapse the 6 reward-shape params that always travel together from
@@ -46,6 +48,83 @@ class RewardConfig:
 # reward-hacking guard is _MIN_TRIANGLES below.
 _MIN_UNIQUE_POINTS = 10
 _MIN_TRIANGLES = 4
+
+
+# ── Subprocess-isolated OCC tessellation ─────────────────────────────────────
+# Why: OCC's STEP parser segfaults (SIGSEGV) on some malformed completions
+# that pass our textual checks. A native segfault kills the rank — try/except
+# can't catch it. We isolate step_to_pointcloud in a worker pool so worker
+# death is recoverable: pool respawns the worker, we return (None, 0).
+#
+# Why spawn (not fork): the prior mp.Process used the default fork() context,
+# which inherits the parent's CUDA/OpenMP state and deadlocks indefinitely.
+# spawn starts a fresh interpreter — no CUDA inheritance, no deadlock.
+# Workers persist across calls, so spawn's startup cost is paid once per pool.
+_OCC_POOL: ProcessPoolExecutor | None = None
+_OCC_POOL_LOCK = threading.Lock()
+_OCC_POOL_WORKERS = 2
+_OCC_TIMEOUT_S = 30.0
+
+
+def _occ_worker(step_content: str, n_points: int,
+                text2cad_src: str | None,
+                deflection: float | None) -> tuple:
+    """Subprocess entrypoint. Top-level so it pickles for spawn."""
+    from reward.step_to_pointcloud import step_to_pointcloud as _s2p
+    return _s2p(step_content, n_points=n_points,
+                text2cad_src=text2cad_src,
+                return_triangle_count=True,
+                deflection=deflection)
+
+
+def _get_occ_pool() -> ProcessPoolExecutor:
+    global _OCC_POOL
+    with _OCC_POOL_LOCK:
+        if _OCC_POOL is None:
+            _OCC_POOL = ProcessPoolExecutor(
+                max_workers=_OCC_POOL_WORKERS,
+                mp_context=mp.get_context("spawn"),
+            )
+        return _OCC_POOL
+
+
+def _shutdown_occ_pool() -> None:
+    global _OCC_POOL
+    with _OCC_POOL_LOCK:
+        if _OCC_POOL is not None:
+            try:
+                _OCC_POOL.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            _OCC_POOL = None
+
+
+atexit.register(_shutdown_occ_pool)
+
+
+def _safe_step_to_pointcloud(step_content: str, *, n_points: int,
+                              text2cad_src: str | None,
+                              deflection: float | None,
+                              timeout: float = _OCC_TIMEOUT_S) -> tuple:
+    """
+    Subprocess-isolated step_to_pointcloud. Returns (pc | None, n_triangles).
+    Survives OCC native segfaults: pool respawns dead workers automatically;
+    BrokenProcessPool poisons the global so the next caller rebuilds it.
+    """
+    global _OCC_POOL
+    pool = _get_occ_pool()
+    try:
+        fut = pool.submit(_occ_worker, step_content, n_points,
+                          text2cad_src, deflection)
+        return fut.result(timeout=timeout)
+    except BrokenProcessPool:
+        with _OCC_POOL_LOCK:
+            _OCC_POOL = None
+        return (None, 0)
+    except FuturesTimeoutError:
+        return (None, 0)
+    except Exception:
+        return (None, 0)
 
 
 # ── Eq. 1: Bidirectional Chamfer Distance ─────────────────────────────────────
@@ -119,42 +198,27 @@ def r_geo(scd: float,
 
 # ── Parse reward (intermediate signal: does OCP accept the generated STEP?) ────
 
-def _parse_worker(queue: mp.Queue, generated_step: str,
-                  text2cad_src: str | None) -> None:
-    """Return 1 if step_to_pointcloud succeeds, else 0."""
-    try:
-        pc, n_tris = step_to_pointcloud(generated_step, n_points=64,
-                                        text2cad_src=text2cad_src,
-                                        return_triangle_count=True)
-        ok = (pc is not None
-              and n_tris >= _MIN_TRIANGLES
-              and len(np.unique(pc, axis=0)) >= _MIN_UNIQUE_POINTS)
-        queue.put(1 if ok else 0)
-    except Exception:
-        queue.put(0)
-
-
 def compute_parse_reward(generated_step: str, text2cad_src: str | None = None,
                          reward_value: float = 0.3) -> float:
     """
     Returns reward_value if the generated STEP parses + tessellates successfully,
-    0.0 otherwise. Runs in-process — subprocess fork deadlocks after CUDA init.
+    0.0 otherwise. OCC tessellation is run in a spawn-context worker pool so
+    a native segfault (seen mid-run on malformed completions) cannot kill the
+    training rank.
     """
     if "END-ISO-10303-21;" not in generated_step:
         return 0.0
-    try:
-        pc, n_tris = step_to_pointcloud(generated_step, n_points=64,
-                                        text2cad_src=text2cad_src,
-                                        return_triangle_count=True)
-        ok = (pc is not None
-              and n_tris >= _MIN_TRIANGLES
-              and len(np.unique(pc, axis=0)) >= _MIN_UNIQUE_POINTS)
-        return reward_value if ok else 0.0
-    except Exception:
-        return 0.0
+    pc, n_tris = _safe_step_to_pointcloud(
+        generated_step, n_points=64,
+        text2cad_src=text2cad_src, deflection=None,
+    )
+    ok = (pc is not None
+          and n_tris >= _MIN_TRIANGLES
+          and len(np.unique(pc, axis=0)) >= _MIN_UNIQUE_POINTS)
+    return reward_value if ok else 0.0
 
 
-# ── Subprocess worker (isolates Open3D segfaults) ─────────────────────────────
+# ── GT point cloud cache (in-process, shared across the 8 GRPO generations) ───
 
 # In-process LRU cache of GT point clouds. All 8 GRPO generations for a prompt
 # share the same GT — without this cache the OCC tessellation runs 8× per prompt
@@ -174,97 +238,6 @@ def _gt_cache_key(gt_step: str, rcfg: RewardConfig) -> str:
     import hashlib
     prefix = f"{rcfg.n_points}|{rcfg.deflection!r}|".encode()
     return hashlib.sha256(prefix + gt_step.encode(errors="replace")).hexdigest()
-
-
-def _scd_worker(queue: mp.Queue, generated_step: str, gt_step: str,
-                rcfg: RewardConfig, text2cad_src: str | None,
-                verbose: bool = False,
-                gt_pc_precomputed: np.ndarray | None = None,
-                gt_tris_precomputed: int | None = None) -> None:
-    """
-    Run the full reward pipeline (STEP parsing + alignment + Chamfer) in a
-    child process so any C++ segfault (OCP tessellation or Open3D) cannot
-    kill the training process.
-    """
-    # Queue payload: (reward, raw_scd, fail_stage, n_tris). raw_scd lets the
-    # parent process see whether the model is at SCD=0.55 (one step from
-    # gradient — lower delta_high) vs SCD=50.0 (broken). fail_stage lets
-    # tensorboard show parse-rate climbing from 5%→80% as a separate scalar.
-    try:
-        # Signal "worker reached the GT phase" so the parent can attribute
-        # a later segfault to GT-side processing instead of pred-side.
-        queue.put(("_phase", "pred"))
-
-        if "END-ISO-10303-21;" not in generated_step:
-            if verbose:
-                print("[scd_worker] FAIL: no terminator")
-            queue.put((0.0, float("nan"), "no_terminator", 0))
-            return
-
-        pred_pc, pred_tris = step_to_pointcloud(generated_step, n_points=rcfg.n_points,
-                                                text2cad_src=text2cad_src, verbose=verbose,
-                                                return_triangle_count=True,
-                                                deflection=rcfg.deflection)
-
-        queue.put(("_phase", "gt"))
-        if gt_pc_precomputed is not None:
-            gt_pc, gt_tris = gt_pc_precomputed, gt_tris_precomputed
-        else:
-            gt_pc, gt_tris = step_to_pointcloud(gt_step, n_points=rcfg.n_points,
-                                                text2cad_src=text2cad_src, verbose=verbose,
-                                                return_triangle_count=True,
-                                                deflection=rcfg.deflection)
-
-        if pred_pc is None:
-            if verbose:
-                print("[scd_worker] FAIL: pred_pc is None (generated STEP failed to parse)")
-            queue.put((0.0, float("nan"), "pred_parse", 0))
-            return
-        if gt_pc is None:
-            if verbose:
-                print("[scd_worker] FAIL: gt_pc is None (GT STEP failed to parse)")
-            queue.put((float("nan"), float("nan"), "gt_parse", pred_tris))
-            return
-
-        if pred_tris < _MIN_TRIANGLES:
-            if verbose:
-                print(f"[scd_worker] FAIL: pred has only {pred_tris} triangles — likely reward-hacking sphere/plane")
-            queue.put((0.0, float("nan"), "pred_degenerate", pred_tris))
-            return
-        if gt_tris < _MIN_TRIANGLES:
-            queue.put((float("nan"), float("nan"), "gt_degenerate", pred_tris))
-            return
-
-        pred_unique = len(np.unique(pred_pc, axis=0))
-        gt_unique   = len(np.unique(gt_pc, axis=0))
-        if pred_unique < _MIN_UNIQUE_POINTS:
-            if verbose:
-                print(f"[scd_worker] FAIL: pred unique_pts={pred_unique} < {_MIN_UNIQUE_POINTS}")
-            queue.put((0.0, float("nan"), "pred_degenerate", pred_tris))
-            return
-        if gt_unique < _MIN_UNIQUE_POINTS:
-            if verbose:
-                print(f"[scd_worker] FAIL: gt unique_pts={gt_unique} < {_MIN_UNIQUE_POINTS}")
-            queue.put((float("nan"), float("nan"), "gt_degenerate", pred_tris))
-            return
-
-        scd = scaled_chamfer_distance(pred_pc, gt_pc, bidirectional=rcfg.bidirectional,
-                                      scale_prenorm=rcfg.scale_prenorm)
-        if verbose:
-            print(f"[scd_worker] SCD={scd:.4f}, finite={np.isfinite(scd)}")
-        if not np.isfinite(scd):
-            # C4: scd_nonfinite is a GT-side or alignment-infrastructure
-            # condition (scale_factor≈0 or align raised) — NaN-mask, not 0.
-            queue.put((float("nan"), float("nan"), "scd_nonfinite", pred_tris))
-            return
-        reward = r_geo(scd, delta_low=rcfg.delta_low, delta_high=rcfg.delta_high)
-        if verbose:
-            print(f"[scd_worker] reward={reward:.4f}")
-        queue.put((reward, float(scd), "ok", pred_tris))
-    except Exception as e:
-        if verbose:
-            print(f"[scd_worker] Exception: {e!r}")
-        queue.put((0.0, float("nan"), "exception", 0))
 
 
 # ── Full reward pipeline ───────────────────────────────────────────────────────
@@ -287,17 +260,17 @@ def compute_reward(
                     | 'pred_degenerate' | 'gt_degenerate' | 'scd_nonfinite' | 'exception'
       n_triangles-- mesh triangle count for the prediction (0 if parse failed)
 
-    Runs in-process — subprocess fork deadlocks after CUDA/OpenMP init on Linux.
+    OCC tessellation runs in a spawn-context worker pool; native segfaults in
+    the OCC C++ parser cannot kill the training rank.
     """
     if "END-ISO-10303-21;" not in generated_step:
         return (0.0, float("nan"), "no_terminator", 0)
 
     try:
-        # Pred point cloud
-        pred_pc, pred_tris = step_to_pointcloud(
+        # Pred point cloud (subprocess-isolated)
+        pred_pc, pred_tris = _safe_step_to_pointcloud(
             generated_step, n_points=rcfg.n_points,
-            text2cad_src=text2cad_src, verbose=verbose,
-            return_triangle_count=True, deflection=rcfg.deflection)
+            text2cad_src=text2cad_src, deflection=rcfg.deflection)
 
         if pred_pc is None:
             return (0.0, float("nan"), "pred_parse", 0)
@@ -312,10 +285,9 @@ def compute_reward(
         if cached is not None:
             gt_pc, gt_tris = cached
         else:
-            gt_pc, gt_tris = step_to_pointcloud(
+            gt_pc, gt_tris = _safe_step_to_pointcloud(
                 gt_step, n_points=rcfg.n_points,
-                text2cad_src=text2cad_src, verbose=verbose,
-                return_triangle_count=True, deflection=rcfg.deflection)
+                text2cad_src=text2cad_src, deflection=rcfg.deflection)
             if gt_pc is not None and gt_tris >= _MIN_TRIANGLES:
                 with _GT_PC_CACHE_LOCK:
                     if cache_key not in _GT_PC_CACHE:
