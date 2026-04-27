@@ -29,10 +29,10 @@
 #SBATCH --partition=ai
 #SBATCH --account=lilly-agentic-gpu
 #SBATCH --requeue                   # allow requeue on preemption or time limit
-#SBATCH --qos=standby               # opportunistic queue, 4h max wall — starts much
-                                    # sooner than normal when cluster is packed.
-                                    # SIGUSR1 handler auto-resubmits T-120s and
-                                    # GRPOTrainer resumes from latest checkpoint.
+#SBATCH --qos=preemptible           # priority 0 — runs opportunistically when normal
+                                    # queue is jammed (ai partition rejects standby).
+                                    # If pre-empted, the SIGUSR1 handler auto-resubmits
+                                    # and GRPOTrainer resumes from latest checkpoint.
 #SBATCH --signal=B:SIGUSR1@120      # warn 120 s before wall-time so we can resubmit
 # #SBATCH --account=YOUR_ACCOUNT   # uncomment and set if your allocation requires it
 
