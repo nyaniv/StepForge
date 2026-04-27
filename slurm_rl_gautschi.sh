@@ -20,7 +20,7 @@
 #SBATCH --job-name=stepforge_rl
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
-#SBATCH --time=08:00:00
+#SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=4                  # 1 task per GPU (torchrun model)
 #SBATCH --ntasks-per-node=4
@@ -29,7 +29,10 @@
 #SBATCH --partition=ai
 #SBATCH --account=lilly-agentic-gpu
 #SBATCH --requeue                   # allow requeue on preemption or time limit
-#SBATCH --qos=normal
+#SBATCH --qos=standby               # opportunistic queue, 4h max wall — starts much
+                                    # sooner than normal when cluster is packed.
+                                    # SIGUSR1 handler auto-resubmits T-120s and
+                                    # GRPOTrainer resumes from latest checkpoint.
 #SBATCH --signal=B:SIGUSR1@120      # warn 120 s before wall-time so we can resubmit
 # #SBATCH --account=YOUR_ACCOUNT   # uncomment and set if your allocation requires it
 
