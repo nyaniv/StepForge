@@ -38,6 +38,7 @@ import glob
 import inspect
 import json
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -69,7 +70,7 @@ from datasets import Dataset
 from loguru import logger
 from omegaconf import OmegaConf
 from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback
 from trl import GRPOConfig, GRPOTrainer
 
 from retrieval.retriever import Retriever
@@ -81,6 +82,13 @@ from reward.scd_reward import compute_reward, compute_parse_reward, RewardConfig
 # model sees the same prompt structure it was trained on.
 
 MAX_RETRIEVED_TOKENS: int = 16384  # overridden per-config in main(); no truncation by default (paper spec)
+
+# Minimum entity count required for format_reward to fire.  Set from the
+# empirical distribution of training-set GT STEPs (scripts/analyze_entity_counts.py)
+# so legitimate training-distribution outputs qualify while the "footer-only"
+# hack (PERSON / ORGANIZATION / APPROVAL boilerplate, ~10-15 entities) doesn't.
+# Override via cfg.rl.min_format_entities; placeholder 50 until empirical run.
+MIN_FORMAT_ENTITIES: int = 50
 
 
 def _build_user_message(caption: str, retrieved_step: str) -> str:
@@ -105,18 +113,38 @@ def format_prompt(caption: str, retrieved_step: str, tokenizer) -> str:
 
 # ── Format reward (completion bonus) ──────────────────────────────────────────
 
+_ENTITY_RE = re.compile(r"^#\d+\s*=", re.MULTILINE)
+
+
 def format_reward_fn(completions: list[str], **kwargs) -> list[float]:
     """
     Small credit (0.2) for generating a syntactically complete STEP file.
-    Gives GRPO gradient signal even when geometry is wrong, encouraging the
-    model to learn to terminate with END-ISO-10303-21; before the geometric
-    reward can kick in.
+
+    Requires both:
+      1. Contains END-ISO-10303-21; terminator
+      2. Has at least MIN_FORMAT_ENTITIES entity declarations (#NNN = ...)
+
+    Both conditions are required to prevent the footer-only reward hack
+    seen in the April 19 RL run, where the model maximized format reward
+    by emitting just the metadata footer (PERSON / ORGANIZATION / APPROVAL
+    boilerplate, containing END-ISO but no geometry).
     """
-    rewards = [0.2 if "END-ISO-10303-21;" in c else 0.0 for c in completions]
-    # Debug: log first completion so we can verify what the model is generating
-    if completions:
-        logger.debug(f"[format_reward] completion[0][:200]: {repr(completions[0][:200])}")
-        logger.debug(f"[format_reward] rewards: {rewards}")
+    entity_counts = [len(_ENTITY_RE.findall(c)) for c in completions]
+    rewards = [
+        0.2 if ("END-ISO-10303-21;" in c and n >= MIN_FORMAT_ENTITIES) else 0.0
+        for c, n in zip(completions, entity_counts)
+    ]
+    if completions and os.environ.get("LOCAL_RANK", "0") == "0":
+        nonzero = sum(1 for r in rewards if r > 0)
+        mean = sum(rewards) / max(len(rewards), 1)
+        avg_ent = sum(entity_counts) / max(len(entity_counts), 1)
+        logger.info(
+            f"[format_reward] nonzero={nonzero}/{len(rewards)} mean={mean:.3f} "
+            f"avg_entities={avg_ent:.1f} threshold={MIN_FORMAT_ENTITIES}"
+        )
+        logger.info(
+            f"[format_reward] completion[0][:200]: {repr(completions[0][:200])}"
+        )
     return rewards
 
 
@@ -147,11 +175,29 @@ def make_reward_fn(text2cad_src: str, delta_low: float, delta_high: float,
             # NaN rewards (GT-side parse failures) must be sanitized to 0.0 —
             # propagating NaN to GRPO loss → NaN gradients → NaN weights → next
             # step's generation crashes with "probability tensor contains nan".
-            rewards = []
+            rewards, stages, raw_scds = [], [], []
             for f in futures:
-                r = f.result()[0]
+                r, raw, stage, _ = f.result()
                 rewards.append(0.0 if not np.isfinite(r) else float(r))
-            return rewards
+                stages.append(stage)
+                raw_scds.append(raw if np.isfinite(raw) else None)
+        if os.environ.get("LOCAL_RANK", "0") == "0":
+            nonzero = sum(1 for r in rewards if r > 0)
+            mean = sum(rewards) / max(len(rewards), 1)
+            stage_counts: dict[str, int] = {}
+            for s in stages:
+                stage_counts[s] = stage_counts.get(s, 0) + 1
+            stage_str = ", ".join(f"{k}={v}" for k, v in sorted(stage_counts.items()))
+            scds_present = [s for s in raw_scds if s is not None]
+            scd_str = (
+                f"median_scd={np.median(scds_present):.4f}" if scds_present
+                else "no_scd_computed"
+            )
+            logger.info(
+                f"[scd_reward] nonzero={nonzero}/{len(rewards)} mean={mean:.4f} "
+                f"{scd_str} stages=[{stage_str}]"
+            )
+        return rewards
 
     return reward_fn
 
@@ -167,10 +213,6 @@ def make_parse_reward_fn(text2cad_src: str):
             if not s.startswith("DATA;") and not s.startswith("ISO-10303-21;"):
                 s = "DATA;\n" + s
             return s
-        if os.environ.get("LOCAL_RANK", "0") == "0" and completions:
-            sample = _fix(completions[0])
-            logger.info(f"[parse_reward] completion[0] first 300 chars: {repr(sample[:300])}")
-            logger.info(f"[parse_reward] has END-ISO: {'END-ISO-10303-21;' in sample}, len={len(sample)}")
         with ThreadPoolExecutor(max_workers=len(completions)) as pool:
             futures = [
                 pool.submit(compute_parse_reward, _fix(gen), text2cad_src=text2cad_src)
@@ -178,10 +220,81 @@ def make_parse_reward_fn(text2cad_src: str):
             ]
             results = [f.result() for f in futures]
         if os.environ.get("LOCAL_RANK", "0") == "0":
-            logger.info(f"[parse_reward] results: {results}")
+            nonzero = sum(1 for r in results if r > 0)
+            mean = sum(results) / max(len(results), 1)
+            logger.info(
+                f"[parse_reward] nonzero={nonzero}/{len(results)} mean={mean:.3f} "
+                f"results={results}"
+            )
         return results
 
     return parse_reward_fn
+
+
+# ── Early-failure callback ────────────────────────────────────────────────────
+
+class RewardHealthCallback(TrainerCallback):
+    """
+    Emit a loud warning if parse_reward and scd_reward stay at 0 for N
+    consecutive logged steps.  Catches the April 19 failure mode (model
+    hacks format reward without producing parseable geometry) within the
+    first ~10 steps instead of after 80.
+
+    Args:
+        warn_after: steps of all-zero parse+scd before WARNING (default 5)
+        fatal_after: steps of all-zero parse+scd before raising RuntimeError
+            (default None — warn only).  Set to e.g. 15 to hard-abort.
+    """
+
+    def __init__(self, warn_after: int = 5, fatal_after: int | None = None):
+        self.warn_after = warn_after
+        self.fatal_after = fatal_after
+        self.zero_streak = 0
+        self.warned = False
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not logs:
+            return
+        parse_key = "rewards/parse_reward_fn"
+        scd_key   = "rewards/reward_fn"
+        parse = logs.get(parse_key, None)
+        scd   = logs.get(scd_key,   None)
+        if parse is None and scd is None:
+            return  # non-reward log line (e.g. eval), ignore
+
+        if (parse is None or parse == 0.0) and (scd is None or scd == 0.0):
+            self.zero_streak += 1
+        else:
+            if self.zero_streak > 0:
+                logger.info(
+                    f"[health] parse/scd rewards started firing at step "
+                    f"{state.global_step} (zero streak was {self.zero_streak})"
+                )
+            self.zero_streak = 0
+            self.warned = False
+            return
+
+        if self.zero_streak == self.warn_after and not self.warned:
+            logger.warning(
+                f"\n{'='*70}\n"
+                f"[health] WARNING: parse_reward AND scd_reward have been 0 "
+                f"for {self.zero_streak} consecutive logged steps "
+                f"(through step {state.global_step}).\n"
+                f"Format reward alone is not enough — the run is heading "
+                f"toward the April 19 failure mode (no geometric learning).\n"
+                f"Check: are completions actually full STEP files? Is OCC "
+                f"importable in the subprocess pool? Are GT steps parseable?\n"
+                f"{'='*70}"
+            )
+            self.warned = True
+
+        if self.fatal_after is not None and self.zero_streak >= self.fatal_after:
+            raise RuntimeError(
+                f"[health] FATAL: parse_reward + scd_reward = 0 for "
+                f"{self.zero_streak} consecutive steps. Aborting so the GPU "
+                f"slot isn't wasted on a known-bad run. Set "
+                f"RewardHealthCallback(fatal_after=None) to disable."
+            )
 
 
 # ── Build RL dataset with live RAG ────────────────────────────────────────────
@@ -274,7 +387,7 @@ def main():
     cfg = OmegaConf.load(args.config)
 
     # ── Apply config-driven globals ──────────────────────────────────────────
-    global MAX_RETRIEVED_TOKENS
+    global MAX_RETRIEVED_TOKENS, MIN_FORMAT_ENTITIES
     # During RL the prompt (retrieved file + caption + chat template) must leave
     # room for max_completion_length generated tokens within the context window.
     # retrieved_budget = max_seq_length - max_completion_length - ~300 overhead
@@ -283,8 +396,13 @@ def main():
     overhead = 300  # chat template tokens + caption
     MAX_RETRIEVED_TOKENS = int(getattr(cfg.model, "max_retrieved_tokens",
                                        max_seq - max_comp - overhead))
+    MIN_FORMAT_ENTITIES = int(getattr(cfg.rl, "min_format_entities",
+                                      MIN_FORMAT_ENTITIES))
     logger.info(f"MAX_RETRIEVED_TOKENS={MAX_RETRIEVED_TOKENS} "
                 f"(max_seq={max_seq}, max_comp={max_comp}, overhead={overhead})")
+    logger.info(f"MIN_FORMAT_ENTITIES={MIN_FORMAT_ENTITIES} "
+                f"(format_reward floor: completion must have ≥{MIN_FORMAT_ENTITIES} "
+                f"entity declarations to receive format reward)")
 
     # ── CLI overrides (smoke test / debugging) ───────────────────────────────
     if args.max_steps is not None:
@@ -488,12 +606,17 @@ def main():
     model.config.use_cache = False
     model.base_model.model.config.use_cache = False
 
+    health_callback = RewardHealthCallback(
+        warn_after=int(getattr(cfg.rl, "health_warn_after", 5)),
+        fatal_after=getattr(cfg.rl, "health_fatal_after", None),
+    )
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
         reward_funcs=[format_reward_fn, parse_reward_fn, reward_fn],
         args=grpo_config,
         train_dataset=rl_dataset,
+        callbacks=[health_callback],
     )
 
     logger.info("Starting GRPO RL training...")
