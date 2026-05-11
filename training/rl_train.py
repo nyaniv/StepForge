@@ -83,12 +83,21 @@ from reward.scd_reward import compute_reward, compute_parse_reward, RewardConfig
 
 MAX_RETRIEVED_TOKENS: int = 16384  # overridden per-config in main(); no truncation by default (paper spec)
 
-# Minimum entity count required for format_reward to fire.  Set from the
-# empirical distribution of training-set GT STEPs (scripts/analyze_entity_counts.py)
-# so legitimate training-distribution outputs qualify while the "footer-only"
-# hack (PERSON / ORGANIZATION / APPROVAL boilerplate, ~10-15 entities) doesn't.
-# Override via cfg.rl.min_format_entities; placeholder 50 until empirical run.
-MIN_FORMAT_ENTITIES: int = 50
+# Minimum entity count required for format_reward to fire.
+#
+# Empirical basis (scripts/analyze_entity_counts.py on 25k in-distribution
+# training GTs, GT ≤ max_completion_length=4096 tokens):
+#     min=46  p5=138  p50=216  p75=318  max=358
+#
+# 138 = p5: 95% of training-distribution outputs qualify, aligning the
+# format reward with the bulk of what the model was trained to produce.
+# This rules out the April 19 "footer-only" hack (~10-15 entities) by a
+# ~10x margin AND prevents a milder collapse where the model emits short
+# but parseable fragments to game format reward.  The sparse tail
+# (training outputs with 46-137 entities, ~5-10% of in-dist data) won't
+# get format reward — acceptable since parse/scd rewards still drive them.
+# Override via cfg.rl.min_format_entities.
+MIN_FORMAT_ENTITIES: int = 138
 
 
 def _build_user_message(caption: str, retrieved_step: str) -> str:
