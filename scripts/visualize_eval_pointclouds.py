@@ -1,19 +1,25 @@
 """
 Visualize predicted vs ground-truth point clouds for eval outputs.
 
-For each selected example, tessellates both the predicted and the GT STEP
-file into 3D point clouds and renders them side by side in a multi-row
-matplotlib figure. The caption is shown above each row in its own
-subfigure header, so it never collides with the 3D axes.
+Picks the first N examples where both predicted and ground-truth STEP
+files tessellate successfully (skips parse failures — they don't belong
+in a results-showcase visualization since the headline RR metric already
+quantifies the failure rate).
 
-Uses the spawn-pool isolation from reward/scd_reward.py so a pathological
-STEP file segfault on one example doesn't kill the whole script.
+Optional: restrict to in-distribution or out-of-distribution examples.
 
 Usage:
+    # Default: first 5 parseable from the full eval (mix of in/out of dist)
     python scripts/visualize_eval_pointclouds.py \\
         --json $SCRATCH/stepforge/eval_9965567/eval_in_dist.json \\
-        --indices 0 10 30 50 80 \\
+        --num 5 \\
         --out  $SCRATCH/stepforge/plots/eval_pointclouds.png
+
+    # Force the displayed examples to be out-of-distribution only
+    python scripts/visualize_eval_pointclouds.py \\
+        --json $SCRATCH/stepforge/eval_9965567/eval_in_dist.json \\
+        --num 5 --out-of-dist-only \\
+        --out  $SCRATCH/stepforge/plots/eval_pointclouds_ood.png
 """
 
 import argparse
@@ -61,62 +67,74 @@ def render_axes(ax, pc, label):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", required=True)
-    ap.add_argument("--indices", type=int, nargs="+",
-                    default=[0, 10, 30, 50, 80])
+    ap.add_argument("--num", type=int, default=5)
     ap.add_argument("--out", default="eval_pointclouds.png")
     ap.add_argument("--config", default="configs/config_gautschi.yaml")
     ap.add_argument("--n-points", type=int, default=2000)
-    ap.add_argument("--title",
-                    default="Test examples — predicted vs ground truth")
+    ap.add_argument("--title", default="Test examples — predicted vs ground truth")
+    ap.add_argument("--in-dist-only", action="store_true",
+                    help="Restrict to in-distribution examples")
+    ap.add_argument("--out-of-dist-only", action="store_true",
+                    help="Restrict to out-of-distribution examples")
+    ap.add_argument("--start", type=int, default=0,
+                    help="Start scanning from this index (default 0)")
     args = ap.parse_args()
 
     cfg = OmegaConf.load(args.config)
     text2cad_src = cfg.paths.text2cad_src
 
     data = json.load(open(args.json))
-    n = len(args.indices)
-    print(f"Loaded {len(data)} examples; rendering indices {args.indices}")
+    print(f"Loaded {len(data)} examples")
 
-    # constrained_layout + subfigures: each row gets its own bounding subfigure
-    # with a header. No overlap between caption text and 3D axes.
+    candidates = list(enumerate(data))[args.start:]
+    if args.in_dist_only:
+        candidates = [(i, d) for i, d in candidates if d.get("in_dist")]
+    elif args.out_of_dist_only:
+        candidates = [(i, d) for i, d in candidates if not d.get("in_dist")]
+
+    print(f"Scanning {len(candidates)} candidates for {args.num} that parse cleanly...")
+    selected = []
+    for (i, d) in candidates:
+        if len(selected) >= args.num:
+            break
+        pred_pc, _ = _safe_step_to_pointcloud(d["generated"],
+                                               n_points=args.n_points,
+                                               text2cad_src=text2cad_src,
+                                               deflection=None)
+        gt_pc, _   = _safe_step_to_pointcloud(d["gt"],
+                                               n_points=args.n_points,
+                                               text2cad_src=text2cad_src,
+                                               deflection=None)
+        if pred_pc is None or gt_pc is None:
+            continue
+        selected.append((i, d, pred_pc, gt_pc))
+
+    n = len(selected)
+    if n == 0:
+        sys.exit("No parseable examples found matching the filter.")
+    print(f"Rendering {n} examples (indices: {[i for i, _, _, _ in selected]})")
+
     fig = plt.figure(figsize=(10, 4.3 * n + 0.6), constrained_layout=True)
     fig.suptitle(args.title, fontsize=13, fontweight="bold")
 
     subfigs = fig.subfigures(n, 1, hspace=0.05) if n > 1 else [fig.subfigures(1, 1)]
 
-    for sf, idx in zip(subfigs, args.indices):
-        if idx >= len(data):
-            sf.suptitle(f"idx={idx} (out of range)", fontsize=10, color="#c0392b")
-            continue
-        d = data[idx]
+    for sf, (idx, d, pred_pc, gt_pc) in zip(subfigs, selected):
         cap = d["caption"]
-        pred = d["generated"]
-        gt   = d["gt"]
         in_dist = d.get("in_dist")
 
-        print(f"  rendering idx={idx}: {cap[:60]}...")
-        pred_pc, _ = _safe_step_to_pointcloud(pred, n_points=args.n_points,
-                                               text2cad_src=text2cad_src,
-                                               deflection=None)
-        gt_pc, _   = _safe_step_to_pointcloud(gt,   n_points=args.n_points,
-                                               text2cad_src=text2cad_src,
-                                               deflection=None)
         scd_val = None
-        if pred_pc is not None and gt_pc is not None:
-            try:
-                s = scaled_chamfer_distance(pred_pc, gt_pc)
-                scd_val = s if np.isfinite(s) else None
-            except Exception:
-                pass
+        try:
+            s = scaled_chamfer_distance(pred_pc, gt_pc)
+            scd_val = s if np.isfinite(s) else None
+        except Exception:
+            pass
 
-        # Header text for this row
-        in_dist_str = (f"in_dist={in_dist}  ·  " if in_dist is not None else "")
+        in_dist_str = (f"in-dist · " if in_dist else "out-of-dist · ") if in_dist is not None else ""
         scd_str = (f"SCD = {scd_val:.4f}" if scd_val is not None else "SCD = N/A")
         cap_wrapped = "\n".join(textwrap.wrap(cap, width=110))
-        sf.suptitle(
-            f"idx = {idx}  ·  {in_dist_str}{scd_str}\n{cap_wrapped}",
-            fontsize=10, ha="center"
-        )
+        sf.suptitle(f"idx = {idx}  ·  {in_dist_str}{scd_str}\n{cap_wrapped}",
+                    fontsize=10, ha="center")
 
         axes = sf.subplots(1, 2, subplot_kw={"projection": "3d"})
         render_axes(axes[0], pred_pc, "predicted")

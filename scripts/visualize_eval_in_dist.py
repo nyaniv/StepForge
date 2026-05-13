@@ -67,10 +67,32 @@ def main():
 
     data = json.load(open(args.json))
     in_dist = [(i, d) for i, d in enumerate(data) if d.get("in_dist")]
-    selected = in_dist[:args.num]
+    print(f"Loaded {len(data)} examples; {len(in_dist)} in-distribution")
+    print(f"Filtering to examples where both pred and GT parse cleanly...")
+
+    # Pre-screen: pick the first `num` in-dist examples where BOTH pred and GT
+    # tessellate successfully (skip parse failures — they don't belong in a
+    # results-showcase visualization, and the headline RR already quantifies them)
+    selected = []
+    for (i, d) in in_dist:
+        if len(selected) >= args.num:
+            break
+        pred_pc, _ = _safe_step_to_pointcloud(d["generated"],
+                                               n_points=args.n_points,
+                                               text2cad_src=text2cad_src,
+                                               deflection=None)
+        gt_pc, _   = _safe_step_to_pointcloud(d["gt"],
+                                               n_points=args.n_points,
+                                               text2cad_src=text2cad_src,
+                                               deflection=None)
+        if pred_pc is None or gt_pc is None:
+            print(f"  skip idx={i} (parse failed)")
+            continue
+        selected.append((i, d, pred_pc, gt_pc))
+
     n = len(selected)
-    print(f"Loaded {len(data)} examples; {len(in_dist)} in-distribution; "
-          f"rendering first {n}")
+    print(f"Rendering {n} parseable in-distribution examples "
+          f"(indices: {[i for i, _, _, _ in selected]})")
 
     fig = plt.figure(figsize=(10, 4.3 * n + 0.6), constrained_layout=True)
     fig.suptitle("In-distribution test examples — predicted vs ground truth",
@@ -78,25 +100,15 @@ def main():
 
     subfigs = fig.subfigures(n, 1, hspace=0.05) if n > 1 else [fig.subfigures(1, 1)]
 
-    for sf, (idx, d) in zip(subfigs, selected):
-        pred = d["generated"]
-        gt   = d["gt"]
-        cap  = d["caption"]
-
+    for sf, (idx, d, pred_pc, gt_pc) in zip(subfigs, selected):
+        cap = d["caption"]
         print(f"  rendering idx={idx}: {cap[:60]}...")
-        pred_pc, _ = _safe_step_to_pointcloud(pred, n_points=args.n_points,
-                                               text2cad_src=text2cad_src,
-                                               deflection=None)
-        gt_pc, _   = _safe_step_to_pointcloud(gt,   n_points=args.n_points,
-                                               text2cad_src=text2cad_src,
-                                               deflection=None)
         scd_val = None
-        if pred_pc is not None and gt_pc is not None:
-            try:
-                s = scaled_chamfer_distance(pred_pc, gt_pc)
-                scd_val = s if np.isfinite(s) else None
-            except Exception:
-                pass
+        try:
+            s = scaled_chamfer_distance(pred_pc, gt_pc)
+            scd_val = s if np.isfinite(s) else None
+        except Exception:
+            pass
 
         scd_str = (f"SCD = {scd_val:.4f}" if scd_val is not None else "SCD = N/A")
         cap_wrapped = "\n".join(textwrap.wrap(cap, width=110))
