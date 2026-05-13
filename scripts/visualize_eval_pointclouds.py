@@ -2,12 +2,9 @@
 Visualize predicted vs ground-truth point clouds for eval outputs.
 
 For each selected example, tessellates both the predicted and the GT STEP
-file into 3D point clouds and renders them side by side in a multi-panel
-matplotlib figure. The caption is shown above each pair.
-
-This is the strongest sanity check that the model is producing
-geometrically faithful CAD models, not just syntactically valid files
-that happen to score well by accident.
+file into 3D point clouds and renders them side by side in a multi-row
+matplotlib figure. The caption is shown above each row in its own
+subfigure header, so it never collides with the 3D axes.
 
 Uses the spawn-pool isolation from reward/scd_reward.py so a pathological
 STEP file segfault on one example doesn't kill the whole script.
@@ -23,6 +20,7 @@ import argparse
 import json
 import os
 import sys
+import textwrap
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -38,39 +36,38 @@ from omegaconf import OmegaConf
 from reward.scd_reward import _safe_step_to_pointcloud, scaled_chamfer_distance
 
 
-def render_pair(ax_pred, ax_gt, pred_pc, gt_pc, title, scd):
-    """Render predicted and GT point clouds on two given Axes3D."""
-    for ax, pc, label in [(ax_pred, pred_pc, "predicted"),
-                          (ax_gt,   gt_pc,   "ground truth")]:
-        if pc is None or len(pc) == 0:
-            ax.text(0.5, 0.5, 0.5, "parse failed", ha="center", va="center",
-                    transform=ax.transAxes, color="red", fontsize=12)
-            ax.set_title(label, fontsize=10)
-            ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-            continue
-        ax.scatter(pc[:, 0], pc[:, 1], pc[:, 2], s=0.5, alpha=0.4,
-                   c="C0" if label == "predicted" else "C2")
+def render_axes(ax, pc, label):
+    if pc is None or len(pc) == 0:
+        ax.text2D(0.5, 0.5, "parse failed",
+                  ha="center", va="center",
+                  transform=ax.transAxes,
+                  color="#c0392b", fontsize=12, fontweight="bold")
         ax.set_title(label, fontsize=10)
-        ax.set_box_aspect((1, 1, 1))
-        # Normalize axes to same scale for visual comparability
-        all_pts = pc
-        ranges = all_pts.max(axis=0) - all_pts.min(axis=0)
-        max_range = max(ranges.max(), 1e-6)
-        center = (all_pts.max(axis=0) + all_pts.min(axis=0)) / 2
-        for setter, c, r in zip([ax.set_xlim, ax.set_ylim, ax.set_zlim],
-                                 center, [max_range] * 3):
-            setter(c - r/2, c + r/2)
-        ax.tick_params(axis='both', labelsize=6)
+        ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
+        return
+    color = "#1f77b4" if label == "predicted" else "#2ca02c"
+    ax.scatter(pc[:, 0], pc[:, 1], pc[:, 2], s=0.6, alpha=0.45, c=color)
+    ax.set_title(label, fontsize=10)
+    ax.set_box_aspect((1, 1, 1))
+    ranges = pc.max(axis=0) - pc.min(axis=0)
+    r = max(ranges.max(), 1e-6)
+    c = (pc.max(axis=0) + pc.min(axis=0)) / 2
+    ax.set_xlim(c[0] - r/2, c[0] + r/2)
+    ax.set_ylim(c[1] - r/2, c[1] + r/2)
+    ax.set_zlim(c[2] - r/2, c[2] + r/2)
+    ax.tick_params(axis="both", labelsize=6)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--json", required=True, help="Eval output JSON")
-    ap.add_argument("--indices", type=int, nargs="+", default=[0, 10, 30, 50, 80],
-                    help="Sample indices to visualize")
+    ap.add_argument("--json", required=True)
+    ap.add_argument("--indices", type=int, nargs="+",
+                    default=[0, 10, 30, 50, 80])
     ap.add_argument("--out", default="eval_pointclouds.png")
     ap.add_argument("--config", default="configs/config_gautschi.yaml")
     ap.add_argument("--n-points", type=int, default=2000)
+    ap.add_argument("--title",
+                    default="Test examples — predicted vs ground truth")
     args = ap.parse_args()
 
     cfg = OmegaConf.load(args.config)
@@ -80,24 +77,30 @@ def main():
     n = len(args.indices)
     print(f"Loaded {len(data)} examples; rendering indices {args.indices}")
 
-    fig = plt.figure(figsize=(8, 3.5 * n))
-    for row, idx in enumerate(args.indices):
+    # constrained_layout + subfigures: each row gets its own bounding subfigure
+    # with a header. No overlap between caption text and 3D axes.
+    fig = plt.figure(figsize=(10, 4.3 * n + 0.6), constrained_layout=True)
+    fig.suptitle(args.title, fontsize=13, fontweight="bold")
+
+    subfigs = fig.subfigures(n, 1, hspace=0.05) if n > 1 else [fig.subfigures(1, 1)]
+
+    for sf, idx in zip(subfigs, args.indices):
         if idx >= len(data):
-            print(f"  skip idx={idx} (out of range)")
+            sf.suptitle(f"idx={idx} (out of range)", fontsize=10, color="#c0392b")
             continue
         d = data[idx]
         cap = d["caption"]
         pred = d["generated"]
         gt   = d["gt"]
+        in_dist = d.get("in_dist")
 
-        print(f"  rendering idx={idx} (caption: {cap[:60]}...)")
+        print(f"  rendering idx={idx}: {cap[:60]}...")
         pred_pc, _ = _safe_step_to_pointcloud(pred, n_points=args.n_points,
                                                text2cad_src=text2cad_src,
                                                deflection=None)
         gt_pc, _   = _safe_step_to_pointcloud(gt,   n_points=args.n_points,
                                                text2cad_src=text2cad_src,
                                                deflection=None)
-
         scd_val = None
         if pred_pc is not None and gt_pc is not None:
             try:
@@ -106,19 +109,19 @@ def main():
             except Exception:
                 pass
 
-        ax_pred = fig.add_subplot(n, 2, 2*row + 1, projection="3d")
-        ax_gt   = fig.add_subplot(n, 2, 2*row + 2, projection="3d")
-        render_pair(ax_pred, ax_gt, pred_pc, gt_pc, cap, scd_val)
+        # Header text for this row
+        in_dist_str = (f"in_dist={in_dist}  ·  " if in_dist is not None else "")
+        scd_str = (f"SCD = {scd_val:.4f}" if scd_val is not None else "SCD = N/A")
+        cap_wrapped = "\n".join(textwrap.wrap(cap, width=110))
+        sf.suptitle(
+            f"idx = {idx}  ·  {in_dist_str}{scd_str}\n{cap_wrapped}",
+            fontsize=10, ha="center"
+        )
 
-        in_dist = d.get("in_dist")
-        in_dist_str = f"  in_dist={in_dist}" if in_dist is not None else ""
-        scd_str = f"SCD={scd_val:.4f}" if scd_val is not None else "SCD=N/A"
-        cap_short = cap if len(cap) <= 110 else cap[:107] + "..."
-        fig.text(0.5, 1 - (row + 0.05) / n,
-                 f"idx={idx}{in_dist_str}  |  {scd_str}\n{cap_short}",
-                 ha="center", fontsize=9, wrap=True)
+        axes = sf.subplots(1, 2, subplot_kw={"projection": "3d"})
+        render_axes(axes[0], pred_pc, "predicted")
+        render_axes(axes[1], gt_pc,   "ground truth")
 
-    plt.tight_layout(rect=(0, 0, 1, 0.97))
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     plt.savefig(args.out, dpi=140, bbox_inches="tight")
     print(f"\nSaved {args.out}")

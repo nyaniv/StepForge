@@ -34,8 +34,8 @@ def main():
     args = ap.parse_args()
 
     methods = [
-        "Yours (full eval, N=100)",
-        "Yours (in-distribution, N=33)",
+        "Mine (full eval, N=100)",
+        "Mine (in-distribution, N=33)",
         "Paper SFT",
         "Paper GRPO",
     ]
@@ -67,7 +67,7 @@ def main():
             ax.text(bar.get_x() + bar.get_width() / 2, v + ymax * 0.01,
                     fmt.format(v), ha="center", va="bottom", fontsize=9)
 
-    fig.suptitle("StepForge: model performance vs paper baselines",
+    fig.suptitle("StepForge: my model performance vs paper baselines",
                  fontsize=13, y=1.02)
     plt.tight_layout()
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
