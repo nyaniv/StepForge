@@ -45,14 +45,21 @@ def main():
     ap.add_argument("--n-points", type=int, default=2000)
     ap.add_argument("--title",
                     default="Metric convergence as sample size grows")
+    ap.add_argument("--in-dist-only", action="store_true",
+                    help="Restrict the running statistic to within-budget "
+                         "examples (in_dist=True in the JSON).")
     args = ap.parse_args()
 
     cfg = OmegaConf.load(args.config)
     text2cad_src = cfg.paths.text2cad_src
 
     data = json.load(open(args.json))
+    if args.in_dist_only:
+        before = len(data)
+        data = [d for d in data if d.get("in_dist")]
+        print(f"Loaded {before} samples; filtered to {len(data)} within-budget")
     n = len(data)
-    print(f"Loaded {n} samples")
+    print(f"Computing running metrics over {n} samples")
 
     # Pre-compute per-sample primitives (CR is just a string check; RR/MSCD
     # need OCC). Doing it once up front, then running metrics are O(n).
