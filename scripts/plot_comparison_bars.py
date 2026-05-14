@@ -34,16 +34,15 @@ def main():
     args = ap.parse_args()
 
     methods = [
-        "Mine (full eval, N=100)",
-        "Mine (in-distribution, N=33)",
-        "Paper SFT",
+        "StepForge RL — full eval (N=100)",
+        "StepForge RL — in-distribution (N=33)",
         "Paper GRPO",
     ]
-    cr   = [args.full_cr,   args.in_dist_cr,   97.00, 99.00]
-    rr   = [args.full_rr,   args.in_dist_rr,   95.18, 92.00]
-    mscd = [args.full_mscd, args.in_dist_mscd, 0.53,  0.098]
+    cr   = [args.full_cr,   args.in_dist_cr,   99.00]
+    rr   = [args.full_rr,   args.in_dist_rr,   92.00]
+    mscd = [args.full_mscd, args.in_dist_mscd, 0.098]
 
-    colors = ["#1f77b4", "#2ca02c", "#888888", "#444444"]
+    colors = ["#1f77b4", "#2ca02c", "#444444"]
     x = np.arange(len(methods))
     width = 0.6
 
@@ -67,7 +66,7 @@ def main():
             ax.text(bar.get_x() + bar.get_width() / 2, v + ymax * 0.01,
                     fmt.format(v), ha="center", va="bottom", fontsize=9)
 
-    fig.suptitle("StepForge: my model performance vs paper baselines",
+    fig.suptitle("StepForge RL vs paper GRPO benchmark",
                  fontsize=13, y=1.02)
     plt.tight_layout()
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)

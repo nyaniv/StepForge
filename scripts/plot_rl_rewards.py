@@ -1,16 +1,15 @@
 """
 Plot RL training curves from a GRPOTrainer trainer_state.json.
 
-Reads `log_history` (one entry per step) and produces a 4-panel figure:
-  fig1: total reward + format / parse / scd reward components
-  fig2: loss + KL
-  fig3: completion length
-  fig4: gradient norm
+Single-panel figure showing the four reward signals across all GRPO steps.
+The previous 4-panel layout (loss / KL / completion length / grad norm)
+was dropped: with only 80 steps, those subplots are noisy and not
+informative — the reward components plot is the single load-bearing chart.
 
 Usage:
-    python scripts/plot_rl_rewards.py \
-        --state $SCRATCH/stepforge/checkpoints/rl-refined/checkpoint-80/trainer_state.json \
-        --out plots/rl_refined_rewards.png
+    python scripts/plot_rl_rewards.py \\
+        --state $SCRATCH/stepforge/checkpoints/rl/checkpoint-80/trainer_state.json \\
+        --out   $SCRATCH/stepforge/plots/rl_v2_rewards.png
 """
 
 import argparse
@@ -27,7 +26,8 @@ def main():
                     help="Path to trainer_state.json")
     ap.add_argument("--out", default="rl_rewards.png",
                     help="Output PNG path")
-    ap.add_argument("--title", default="StepForge RL (refined SFT) — 80 GRPO steps")
+    ap.add_argument("--title",
+                    default="GRPO reward signals across 80 RL optimization steps")
     args = ap.parse_args()
 
     with open(args.state) as f:
@@ -39,50 +39,19 @@ def main():
     fmt   = np.array([e.get("rewards/format_reward_fn", np.nan) for e in hist])
     parse = np.array([e.get("rewards/parse_reward_fn",  np.nan) for e in hist])
     scd   = np.array([e.get("rewards/reward_fn",        np.nan) for e in hist])
-    loss  = np.array([e.get("loss", np.nan) for e in hist])
-    kl    = np.array([e.get("kl",   np.nan) for e in hist])
-    comp  = np.array([e.get("completion_length", np.nan) for e in hist])
-    grad  = np.array([e.get("grad_norm", np.nan) for e in hist])
 
-    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
-    fig.suptitle(args.title, fontsize=14, y=0.995)
-
-    ax = axes[0, 0]
-    ax.plot(steps, total, "k-",  lw=2.2, label="total reward")
-    ax.plot(steps, fmt,   "C0-", lw=1.4, alpha=0.8, label="format")
-    ax.plot(steps, parse, "C1-", lw=1.4, alpha=0.8, label="parse")
-    ax.plot(steps, scd,   "C2-", lw=1.4, alpha=0.8, label="SCD (chamfer)")
-    ax.set_xlabel("step")
-    ax.set_ylabel("reward")
-    ax.set_title("Reward components")
-    ax.legend(loc="best")
+    fig, ax = plt.subplots(1, 1, figsize=(10, 5.5))
+    ax.plot(steps, total, "k-",  lw=2.4, label="total reward")
+    ax.plot(steps, scd,   color="#2ca02c", lw=1.6, alpha=0.9, label="SCD (chamfer)")
+    ax.plot(steps, parse, color="#ff7f0e", lw=1.4, alpha=0.85, label="parse")
+    ax.plot(steps, fmt,   color="#1f77b4", lw=1.4, alpha=0.85, label="format")
+    ax.set_xlabel("optimization step", fontsize=11)
+    ax.set_ylabel("reward", fontsize=11)
+    ax.set_title(args.title, fontsize=13, fontweight="bold", pad=14)
+    ax.legend(loc="upper right", framealpha=0.95)
     ax.grid(alpha=0.3)
-
-    ax = axes[0, 1]
-    ax.plot(steps, loss, "C3-", lw=1.6, label="loss")
-    ax.set_xlabel("step")
-    ax.set_ylabel("loss", color="C3")
-    ax.tick_params(axis="y", labelcolor="C3")
-    ax.grid(alpha=0.3)
-    ax2 = ax.twinx()
-    ax2.plot(steps, kl, "C4-", lw=1.4, alpha=0.8, label="KL")
-    ax2.set_ylabel("KL", color="C4")
-    ax2.tick_params(axis="y", labelcolor="C4")
-    ax.set_title("Loss & KL divergence")
-
-    ax = axes[1, 0]
-    ax.plot(steps, comp, "C5-", lw=1.6)
-    ax.set_xlabel("step")
-    ax.set_ylabel("avg completion length (tokens)")
-    ax.set_title("Completion length")
-    ax.grid(alpha=0.3)
-
-    ax = axes[1, 1]
-    ax.plot(steps, grad, "C6-", lw=1.6)
-    ax.set_xlabel("step")
-    ax.set_ylabel("grad norm")
-    ax.set_title("Gradient norm")
-    ax.grid(alpha=0.3)
+    ax.set_xlim(0, steps.max() + 1)
+    ax.set_ylim(bottom=0)
 
     plt.tight_layout()
     out = os.path.expanduser(args.out)
@@ -93,10 +62,12 @@ def main():
     print("\nFinal-step summary:")
     last = hist[-1]
     for k in ("step", "reward", "rewards/format_reward_fn",
-              "rewards/parse_reward_fn", "rewards/reward_fn",
-              "loss", "kl", "completion_length", "grad_norm"):
-        print(f"  {k:<32s} {last.get(k):>10.4f}" if isinstance(last.get(k), (int, float))
-              else f"  {k:<32s} {last.get(k)}")
+              "rewards/parse_reward_fn", "rewards/reward_fn"):
+        v = last.get(k)
+        if isinstance(v, (int, float)):
+            print(f"  {k:<32s} {v:>10.4f}")
+        else:
+            print(f"  {k:<32s} {v}")
 
 
 if __name__ == "__main__":
