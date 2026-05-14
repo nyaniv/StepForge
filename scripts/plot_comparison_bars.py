@@ -35,7 +35,7 @@ def main():
 
     methods = [
         "StepForge RL — full eval (N=100)",
-        "StepForge RL — in-distribution (N=33)",
+        "StepForge RL — within-budget (N=33)",
         "Paper GRPO",
     ]
     cr   = [args.full_cr,   args.in_dist_cr,   99.00]
