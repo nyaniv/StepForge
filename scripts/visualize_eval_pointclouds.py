@@ -77,8 +77,12 @@ def main():
     ap.add_argument("--out-of-dist-only", action="store_true",
                     help="Restrict to out-of-distribution examples")
     ap.add_argument("--pred-fail-only", action="store_true",
-                    help="Show examples where prediction failed to parse but "
-                         "GT tessellates cleanly (the visualizable failure mode)")
+                    help="Show only examples where prediction failed to parse but "
+                         "GT tessellates cleanly")
+    ap.add_argument("--include-fail", action="store_true",
+                    help="Render (num-1) parseable examples plus 1 example where "
+                         "the prediction fails to parse but GT tessellates cleanly "
+                         "(mixes working and failure modes in one figure)")
     ap.add_argument("--start", type=int, default=0,
                     help="Start scanning from this index (default 0)")
     args = ap.parse_args()
@@ -95,15 +99,22 @@ def main():
     elif args.out_of_dist_only:
         candidates = [(i, d) for i, d in candidates if not d.get("in_dist")]
 
+    parseable_target = args.num
+    fail_target = 0
     if args.pred_fail_only:
-        print(f"Scanning {len(candidates)} candidates for {args.num} where pred "
-              f"fails to parse but GT tessellates cleanly...")
-    else:
-        print(f"Scanning {len(candidates)} candidates for {args.num} where both "
-              f"pred and GT tessellate cleanly...")
-    selected = []
+        parseable_target = 0
+        fail_target = args.num
+    elif args.include_fail:
+        parseable_target = max(args.num - 1, 0)
+        fail_target = 1
+
+    print(f"Scanning {len(candidates)} candidates: need "
+          f"{parseable_target} parseable + {fail_target} pred-fail")
+
+    parseable = []
+    failed = []
     for (i, d) in candidates:
-        if len(selected) >= args.num:
+        if len(parseable) >= parseable_target and len(failed) >= fail_target:
             break
         pred_pc, _ = _safe_step_to_pointcloud(d["generated"],
                                                n_points=args.n_points,
@@ -113,15 +124,17 @@ def main():
                                                n_points=args.n_points,
                                                text2cad_src=text2cad_src,
                                                deflection=None)
-        if args.pred_fail_only:
-            # Want: pred FAILED to parse, GT parsed successfully
-            if pred_pc is not None or gt_pc is None:
-                continue
-        else:
-            # Default: both must parse cleanly
-            if pred_pc is None or gt_pc is None:
-                continue
-        selected.append((i, d, pred_pc, gt_pc))
+        if pred_pc is None and gt_pc is not None:
+            if len(failed) < fail_target:
+                failed.append((i, d, pred_pc, gt_pc))
+        elif pred_pc is not None and gt_pc is not None:
+            if len(parseable) < parseable_target:
+                parseable.append((i, d, pred_pc, gt_pc))
+        # else: both failed or only gt failed — skip
+
+    # Render parseable first, then the failure(s) so the failure case is
+    # the visual "anchor" at the bottom of the figure.
+    selected = parseable + failed
 
     n = len(selected)
     if n == 0:
