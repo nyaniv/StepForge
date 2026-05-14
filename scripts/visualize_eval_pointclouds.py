@@ -76,6 +76,9 @@ def main():
                     help="Restrict to in-distribution examples")
     ap.add_argument("--out-of-dist-only", action="store_true",
                     help="Restrict to out-of-distribution examples")
+    ap.add_argument("--pred-fail-only", action="store_true",
+                    help="Show examples where prediction failed to parse but "
+                         "GT tessellates cleanly (the visualizable failure mode)")
     ap.add_argument("--start", type=int, default=0,
                     help="Start scanning from this index (default 0)")
     args = ap.parse_args()
@@ -92,7 +95,12 @@ def main():
     elif args.out_of_dist_only:
         candidates = [(i, d) for i, d in candidates if not d.get("in_dist")]
 
-    print(f"Scanning {len(candidates)} candidates for {args.num} that parse cleanly...")
+    if args.pred_fail_only:
+        print(f"Scanning {len(candidates)} candidates for {args.num} where pred "
+              f"fails to parse but GT tessellates cleanly...")
+    else:
+        print(f"Scanning {len(candidates)} candidates for {args.num} where both "
+              f"pred and GT tessellate cleanly...")
     selected = []
     for (i, d) in candidates:
         if len(selected) >= args.num:
@@ -105,8 +113,14 @@ def main():
                                                n_points=args.n_points,
                                                text2cad_src=text2cad_src,
                                                deflection=None)
-        if pred_pc is None or gt_pc is None:
-            continue
+        if args.pred_fail_only:
+            # Want: pred FAILED to parse, GT parsed successfully
+            if pred_pc is not None or gt_pc is None:
+                continue
+        else:
+            # Default: both must parse cleanly
+            if pred_pc is None or gt_pc is None:
+                continue
         selected.append((i, d, pred_pc, gt_pc))
 
     n = len(selected)
