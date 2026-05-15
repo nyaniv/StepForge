@@ -90,7 +90,7 @@ print(tok.decode(out[0][ids.input_ids.shape[1]:], skip_special_tokens=True))
 
 ## Source
 
-Code, configs, and full training logs: https://github.com/CoolK0912/StepForge
+Code, configs, and full training logs: https://github.com/nyaniv/StepForge
 """
 
 

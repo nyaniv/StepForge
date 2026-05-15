@@ -177,7 +177,7 @@ GPU-hour availability, not by an unsolved technical problem.
 ## 7. Reproducibility
 
 All code, configs, and logs are versioned at:
-- Repo: https://github.com/CoolK0912/StepForge
+- Repo: https://github.com/nyaniv/StepForge
 - Key commits:
   - `63c9aa5` — final RL training fix (format-reward gating)
   - `9fbe6ee` — evaluation and visualization tooling
