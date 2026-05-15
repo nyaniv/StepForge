@@ -127,6 +127,43 @@ def _safe_step_to_pointcloud(step_content: str, *, n_points: int,
         return (None, 0)
 
 
+def _occ_mesh_worker(step_content: str,
+                     text2cad_src: str | None,
+                     deflection: float | None) -> tuple:
+    """Subprocess entrypoint that returns the tessellated triangle mesh."""
+    from reward.step_to_pointcloud import step_to_pointcloud as _s2p
+    pts, n_tris, mesh = _s2p(step_content, n_points=2,  # n_points doesn't matter
+                              text2cad_src=text2cad_src,
+                              return_triangle_count=True,
+                              return_mesh=True,
+                              deflection=deflection)
+    return (mesh, n_tris)
+
+
+def _safe_step_to_mesh(step_content: str, *,
+                        text2cad_src: str | None,
+                        deflection: float | None = None,
+                        timeout: float = _OCC_TIMEOUT_S) -> tuple:
+    """
+    Subprocess-isolated tessellation. Returns (mesh | None, n_triangles)
+    where mesh is a (T, 3, 3) ndarray of triangle vertices (world coords),
+    suitable for direct matplotlib Poly3DCollection rendering.
+    """
+    global _OCC_POOL
+    pool = _get_occ_pool()
+    try:
+        fut = pool.submit(_occ_mesh_worker, step_content, text2cad_src, deflection)
+        return fut.result(timeout=timeout)
+    except BrokenProcessPool:
+        with _OCC_POOL_LOCK:
+            _OCC_POOL = None
+        return (None, 0)
+    except FuturesTimeoutError:
+        return (None, 0)
+    except Exception:
+        return (None, 0)
+
+
 # ── Eq. 1: Bidirectional Chamfer Distance ─────────────────────────────────────
 
 def chamfer_distance(P: np.ndarray, Q: np.ndarray, *, bidirectional: bool = True) -> float:

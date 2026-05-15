@@ -22,9 +22,10 @@ def step_to_pointcloud(step_content: str, n_points: int = 2000, *,
                        text2cad_src: str | None = None,
                        verbose: bool = False,
                        return_triangle_count: bool = False,
+                       return_mesh: bool = False,
                        deflection: float | None = None):
     """
-    Convert STEP text → sampled 3D point cloud.
+    Convert STEP text → sampled 3D point cloud (and/or triangulated mesh).
 
     Args:
         step_content: complete STEP file as a string
@@ -35,14 +36,25 @@ def step_to_pointcloud(step_content: str, n_points: int = 2000, *,
             scd_reward.py uses this for the reward-hacking guard — barycentric
             sampling produces continuous unique points even from a single
             triangle, so unique-point count can't detect a degenerate mesh.
+        return_mesh: if True, also return the world-space triangle array of
+            shape (T, 3, 3) for direct mesh rendering. Adds the mesh as the
+            last element of the returned tuple. Has no effect on the point
+            cloud computation; it's just an additional output.
 
     Returns:
         (n_points, 3) float64 array sampled uniformly over surface area,
         or None if STEP is invalid/unrenderable.
         If return_triangle_count: (pts | None, n_triangles).
+        If return_mesh: same shape with mesh appended as last element;
+        mesh is a (T, 3, 3) ndarray of triangle vertices or None on failure.
     """
-    def _ret(pts, n_tris=0):
-        return (pts, n_tris) if return_triangle_count else pts
+    def _ret(pts, n_tris=0, mesh=None):
+        out = (pts,)
+        if return_triangle_count:
+            out = out + (n_tris,)
+        if return_mesh:
+            out = out + (mesh,)
+        return out if (return_triangle_count or return_mesh) else pts
     if text2cad_src:
         parent = os.path.dirname(text2cad_src)
         for p in [text2cad_src, parent]:
@@ -230,7 +242,7 @@ def step_to_pointcloud(step_content: str, n_points: int = 2000, *,
             defl_str = f"{deflection:.3g}" if deflection is not None else "adaptive"
             print(f"[step_to_pointcloud] OK: faces={n_faces}, tris={len(tris)}, "
                   f"sampled={len(pts)}, unique={unique_pts}, deflection={defl_str}")
-        return _ret(pts, len(tris))
+        return _ret(pts, len(tris), tris)
 
     except ImportError:
         raise
